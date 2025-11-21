@@ -1,0 +1,24 @@
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "pr-redirect-service"
+resolve_s3 = true
+s3_prefix = "pr-redirect-service"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+parameter_overrides = [
+    "DomainName=short.panelretter.de",
+    "HostedZoneId=Z1234567890ABC",
+    "CertificateArn=arn:aws:acm:eu-central-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
+    "RedirectBucket=my-redirect-bucket-name",
+    "RedirectKey=redirects.json",
+    "DefaultRedirectUrl=https://panelretter.de"
+]

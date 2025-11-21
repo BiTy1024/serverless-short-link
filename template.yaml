@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Redirect service for short.panelretter.de
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: short.panelretter.de
+    Description: Custom domain name for the redirect service
+  
+  HostedZoneId:
+    Type: String
+    Description: Route53 Hosted Zone ID for panelretter.de
+  
+  CertificateArn:
+    Type: String
+    Description: ACM Certificate ARN for short.panelretter.de (must be in same region)
+  
+  RedirectBucket:
+    Type: String
+    Description: S3 bucket containing the redirect mapping file
+  
+  RedirectKey:
+    Type: String
+    Default: redirects.json
+    Description: S3 key for the redirect mapping file
+  
+  DefaultRedirectUrl:
+    Type: String
+    Default: https://panelretter.de
+    Description: Fallback URL when no mapping is found
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+    Runtime: python3.12
+    Architectures:
+      - arm64
+
+Resources:
+  RedirectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-redirect
+      CodeUri: src/
+      Handler: handler.lambda_handler
+      Description: Handles URL redirects based on S3 mapping
+      Environment:
+        Variables:
+          REDIRECT_BUCKET: !Ref RedirectBucket
+          REDIRECT_KEY: !Ref RedirectKey
+          DEFAULT_REDIRECT_URL: !Ref DefaultRedirectUrl
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub arn:aws:s3:::${RedirectBucket}/${RedirectKey}
+      Events:
+        RootPath:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /
+            Method: ANY
+        ProxyPath:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /{proxy+}
+            Method: ANY
+
+  RedirectHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      Domain:
+        DomainName: !Ref DomainName
+        CertificateArn: !Ref CertificateArn
+        Route53:
+          HostedZoneId: !Ref HostedZoneId
+
+  RedirectFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${RedirectFunction}
+      RetentionInDays: 14
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${RedirectHttpApi}.execute-api.${AWS::Region}.amazonaws.com
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiEndpoint
+  
+  CustomDomainUrl:
+    Description: Custom domain URL
+    Value: !Sub https://${DomainName}
+    Export:
+      Name: !Sub ${AWS::StackName}-CustomDomain
+  
+  RedirectFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt RedirectFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-FunctionArn
+  
+  RedirectFunctionName:
+    Description: Lambda function name
+    Value: !Ref RedirectFunction
+    Export:
+      Name: !Sub ${AWS::StackName}-FunctionName
