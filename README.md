@@ -31,66 +31,180 @@ A lightweight serverless redirect service for `short.panelretter.de` using AWS L
 
 ```
 .
-├── template.yaml           # SAM template
-├── samconfig.toml         # SAM deployment config
-├── redirects.json         # Example redirect mappings
-├── src/
-│   ├── handler.py         # Lambda function code
-│   └── requirements.txt   # Python dependencies
-└── .github/
-    └── workflows/
-        └── deploy.yml     # GitHub Actions CI/CD
+├── template.yaml              # SAM template
+├── samconfig.toml            # SAM deployment config (git ignored)
+├── samconfig.example.toml    # Example config with placeholders
+├── redirects.json            # Example redirect mappings
+└── src/
+    ├── handler.py            # Lambda function code
+    └── requirements.txt      # Python dependencies
 ```
 
-## Setup
+## Manual Deployment Guide
 
-### 1. Create S3 Bucket
+### Prerequisites
+
+Install required tools:
 
 ```bash
-aws s3 mb s3://your-redirect-bucket
-aws s3 cp redirects.json s3://your-redirect-bucket/redirects.json
+# Install AWS CLI
+brew install awscli
+
+# Install AWS SAM CLI
+brew tap aws/tap
+brew install aws-sam-cli
+
+# Configure AWS credentials
+aws configure
 ```
 
-### 2. Create ACM Certificate
+### Step 1: Create S3 Bucket for Redirects
 
 ```bash
+# Create bucket (use a unique name)
+aws s3 mb s3://panelretter-redirects --region eu-central-1
+
+# Enable versioning (recommended)
+aws s3api put-bucket-versioning \
+  --bucket panelretter-redirects \
+  --versioning-configuration Status=Enabled \
+  --region eu-central-1
+
+# Upload redirect mappings
+aws s3 cp redirects.json s3://panelretter-redirects/redirects.json
+```
+
+**Important**: Note your bucket name - you'll need it later.
+
+### Step 2: Request ACM Certificate
+
+```bash
+# Request certificate for your custom domain
 aws acm request-certificate \
   --domain-name short.panelretter.de \
   --validation-method DNS \
   --region eu-central-1
 ```
 
-Validate the certificate via DNS records in Route53.
+This command returns a `CertificateArn`. Save it.
 
-### 3. Get Hosted Zone ID
+**Validate the certificate:**
 
+1. Get validation records:
 ```bash
-aws route53 list-hosted-zones-by-name --dns-name panelretter.de
+aws acm describe-certificate \
+  --certificate-arn YOUR_CERTIFICATE_ARN \
+  --region eu-central-1 \
+  --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
 ```
 
-### 4. Configure Deployment
+2. Add the CNAME record to Route53:
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id YOUR_HOSTED_ZONE_ID \
+  --change-batch '{
+    "Changes": [{
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "_xxx.short.panelretter.de",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [{"Value": "_yyy.acm-validations.aws."}]
+      }
+    }]
+  }'
+```
 
-Edit `samconfig.toml` and replace placeholder values:
+3. Wait for validation (usually 5-10 minutes):
+```bash
+aws acm wait certificate-validated \
+  --certificate-arn YOUR_CERTIFICATE_ARN \
+  --region eu-central-1
+```
+
+### Step 3: Get Route53 Hosted Zone ID
+
+```bash
+aws route53 list-hosted-zones-by-name \
+  --dns-name panelretter.de \
+  --query 'HostedZones[0].Id' \
+  --output text
+```
+
+This returns something like `/hostedzone/Z1234567890ABC`. Save the ID part (`Z1234567890ABC`).
+
+### Step 4: Configure Deployment
+
+Copy the example config:
+
+```bash
+cp samconfig.example.toml samconfig.toml
+```
+
+Edit `samconfig.toml` with your actual values:
 
 ```toml
 parameter_overrides = [
     "DomainName=short.panelretter.de",
-    "HostedZoneId=YOUR_HOSTED_ZONE_ID",
-    "CertificateArn=YOUR_CERTIFICATE_ARN",
-    "RedirectBucket=your-redirect-bucket",
+    "HostedZoneId=Z1234567890ABC",                          # From Step 3
+    "CertificateArn=arn:aws:acm:...",                       # From Step 2
+    "RedirectBucket=panelretter-redirects",                 # From Step 1
     "RedirectKey=redirects.json",
     "DefaultRedirectUrl=https://panelretter.de"
 ]
 ```
 
-### 5. Deploy
+### Step 5: Build and Deploy
 
 ```bash
+# Build the Lambda function
 sam build
+
+# Deploy with guided prompts
 sam deploy --guided
 ```
 
-Follow the prompts to confirm settings.
+**During guided deployment, confirm:**
+- Stack name: `pr-redirect-service`
+- AWS Region: `eu-central-1`
+- Confirm changes before deploy: `Y`
+- Allow SAM CLI IAM role creation: `Y`
+- Disable rollback: `N`
+- Save arguments to config: `Y`
+
+**Deployment takes 5-10 minutes.**
+
+### Step 6: Verify Deployment
+
+Check stack status:
+```bash
+aws cloudformation describe-stacks \
+  --stack-name pr-redirect-service \
+  --query 'Stacks[0].StackStatus'
+```
+
+Get outputs:
+```bash
+aws cloudformation describe-stacks \
+  --stack-name pr-redirect-service \
+  --query 'Stacks[0].Outputs'
+```
+
+### Step 7: Test Your Redirects
+
+```bash
+# Test with curl
+curl -I https://short.panelretter.de/mieter
+
+# Should return:
+# HTTP/2 301
+# location: https://panelretter.de/blogs/blog/unser-musterschreiben-fur-mieter
+```
+
+Test in browser:
+- `https://short.panelretter.de/` → redirects to `https://panelretter.de`
+- `https://short.panelretter.de/mieter` → redirects to Mieter blog post
+- `https://short.panelretter.de/unknown` → redirects to default URL
 
 ## Redirect Configuration
 
@@ -114,17 +228,23 @@ aws s3 cp redirects.json s3://your-redirect-bucket/redirects.json
 
 Lambda will reload the file on the next cold start.
 
-## GitHub Actions Setup
+## Updating Redirects (No Redeployment Needed)
 
-Configure the following secrets in your GitHub repository:
+To add/modify/remove redirects:
 
-- `AWS_ROLE_ARN` - IAM role for GitHub Actions OIDC
-- `DOMAIN_NAME` - `short.panelretter.de`
-- `HOSTED_ZONE_ID` - Route53 hosted zone ID
-- `CERTIFICATE_ARN` - ACM certificate ARN
-- `REDIRECT_BUCKET` - S3 bucket name
+1. Edit `redirects.json` locally
+2. Upload to S3:
+```bash
+aws s3 cp redirects.json s3://panelretter-redirects/redirects.json
+```
+3. Lambda will reload on next cold start (usually within minutes)
 
-The workflow automatically deploys on push to `main` and updates S3 when `redirects.json` changes.
+To force immediate reload, restart the Lambda:
+```bash
+aws lambda update-function-configuration \
+  --function-name pr-redirect-service-redirect \
+  --environment Variables="{REDIRECT_BUCKET=panelretter-redirects,REDIRECT_KEY=redirects.json,DEFAULT_REDIRECT_URL=https://panelretter.de,FORCE_RELOAD=$(date +%s)}"
+```
 
 ## Testing
 
@@ -190,11 +310,79 @@ Check Route53 alias record points to API Gateway domain.
 
 Lambda caches mappings in memory. Wait for cold start or manually update Lambda environment variable to force reload.
 
-## Cleanup
+## Redeploying After Code Changes
+
+If you modify Lambda code or SAM template:
 
 ```bash
-sam delete
+sam build
+sam deploy
 ```
+
+No need for `--guided` - it uses saved config from `samconfig.toml`.
+
+## Cleanup
+
+To delete all resources:
+
+```bash
+# Delete SAM stack (Lambda, API Gateway, CloudWatch logs)
+sam delete
+
+# Delete S3 bucket (if no longer needed)
+aws s3 rb s3://panelretter-redirects --force
+
+# Delete ACM certificate (optional)
+aws acm delete-certificate \
+  --certificate-arn YOUR_CERTIFICATE_ARN \
+  --region eu-central-1
+```
+
+## Troubleshooting Common Issues
+
+### Issue: Certificate validation stuck
+
+**Solution**: Verify CNAME record is correct in Route53:
+```bash
+dig _xxx.short.panelretter.de CNAME
+```
+
+### Issue: Custom domain returns 403 Forbidden
+
+**Solution**: 
+1. Verify certificate is in `ISSUED` status
+2. Check certificate region matches API Gateway region
+3. Wait 5-10 minutes for DNS propagation
+
+### Issue: Lambda returns 502
+
+**Solution**: Check Lambda has S3 read permissions:
+```bash
+aws lambda get-policy --function-name pr-redirect-service-redirect
+```
+
+View recent errors:
+```bash
+aws logs tail /aws/lambda/pr-redirect-service-redirect --since 1h
+```
+
+### Issue: Redirects not updating
+
+**Solution**: Lambda caches mappings. Either:
+- Wait for cold start (happens naturally after ~15 min of inactivity)
+- Use force reload command from "Updating Redirects" section
+
+## Cost Estimate
+
+Based on 100,000 requests/month:
+
+- **Lambda**: ~$0.20 (ARM64, 256MB, 100ms avg)
+- **API Gateway**: ~$0.10 (HTTP API pricing)
+- **S3**: ~$0.01 (GET requests + storage)
+- **Route53**: $0.50 (hosted zone)
+- **CloudWatch**: ~$0.50 (logs)
+
+**Total**: ~$1.31/month
 
 ## License
 
