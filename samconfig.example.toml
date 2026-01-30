@@ -5,6 +5,8 @@ version = 0.1
 stack_name = "pr-redirect-service"
 resolve_s3 = true
 s3_prefix = "pr-redirect-service"
+region = "eu-central-1"
+
 
 [default.build.parameters]
 cached = true
