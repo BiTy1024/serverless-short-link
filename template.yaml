@@ -39,6 +39,21 @@ Globals:
       - arm64
 
 Resources:
+  RedirectStatsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-redirect-stats
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: redirect_path
+          AttributeType: S
+      KeySchema:
+        - AttributeName: redirect_path
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-redirect-stats
+
   RedirectFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -51,6 +66,7 @@ Resources:
           REDIRECT_BUCKET: !Ref RedirectBucket
           REDIRECT_KEY: !Ref RedirectKey
           DEFAULT_REDIRECT_URL: !Ref DefaultRedirectUrl
+          STATS_TABLE_NAME: !Ref RedirectStatsTable
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -58,6 +74,13 @@ Resources:
               Action:
                 - s3:GetObject
               Resource: !Sub arn:aws:s3:::${RedirectBucket}/${RedirectKey}
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource: !GetAtt RedirectStatsTable.Arn
       Events:
         RootPath:
           Type: HttpApi
@@ -112,3 +135,9 @@ Outputs:
     Value: !Ref RedirectFunction
     Export:
       Name: !Sub ${AWS::StackName}-FunctionName
+  
+  StatsTableName:
+    Description: DynamoDB table name for redirect statistics
+    Value: !Ref RedirectStatsTable
+    Export:
+      Name: !Sub ${AWS::StackName}-StatsTableName

@@ -2,18 +2,21 @@ import json
 import os
 import logging
 import boto3
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 s3_client = boto3.client('s3')
+dynamodb = boto3.resource('dynamodb')
 
 redirect_mappings: Optional[Dict[str, str]] = None
 
 REDIRECT_BUCKET = os.environ['REDIRECT_BUCKET']
 REDIRECT_KEY = os.environ['REDIRECT_KEY']
 DEFAULT_REDIRECT_URL = os.environ['DEFAULT_REDIRECT_URL']
+STATS_TABLE_NAME = os.environ['STATS_TABLE_NAME']
 
 
 def load_redirects() -> Dict[str, str]:
@@ -58,6 +61,26 @@ def get_redirect_url(path: str, mappings: Dict[str, str]) -> str:
     return DEFAULT_REDIRECT_URL
 
 
+def track_redirect(path: str, target_url: str) -> None:
+    """Track redirect in DynamoDB by incrementing click count."""
+    try:
+        table = dynamodb.Table(STATS_TABLE_NAME)
+        response = table.update_item(
+            Key={'redirect_path': path},
+            UpdateExpression='SET target_url = :url, last_accessed = :timestamp ADD click_count :inc',
+            ExpressionAttributeValues={
+                ':url': target_url,
+                ':timestamp': datetime.now(timezone.utc).isoformat(),
+                ':inc': 1
+            },
+            ReturnValues='UPDATED_NEW'
+        )
+        logger.info(f"Tracked redirect: {path} -> total clicks: {response.get('Attributes', {}).get('click_count', 1)}")
+    except Exception as e:
+        # Don't fail the redirect if tracking fails
+        logger.error(f"Failed to track redirect: {str(e)}")
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     try:
         path = event.get('rawPath', '/')
@@ -65,6 +88,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         
         mappings = load_redirects()
         redirect_url = get_redirect_url(path, mappings)
+        
+        # Track the redirect asynchronously (non-blocking)
+        normalized_path = normalize_path(path)
+        track_redirect(normalized_path, redirect_url)
         
         return {
             'statusCode': 301,
