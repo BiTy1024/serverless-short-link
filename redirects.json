@@ -5,5 +5,9 @@
   "/erlangen": "https://panelretter.de/pages/sammelbestellung-erlangen-solar",
   "/erlangen/": "https://panelretter.de/pages/sammelbestellung-erlangen-solar",
   "/rotary": "https://v2202211186970207799.luckysrv.de/grafana/login",
-  "/rotary/": "https://v2202211186970207799.luckysrv.de/grafana/login"
+  "/rotary/": "https://v2202211186970207799.luckysrv.de/grafana/login",
+  "/bkw-video": "https://panelretter.de",
+  "/bkw-video/": "https://panelretter.de",
+  "/naturstrom": "https://www.naturstrom.de/privatkunden/oekostrom/naturstrom-balkonsolar",
+  "/naturstrom/": "https://www.naturstrom.de/privatkunden/oekostrom/naturstrom-balkonsolar"
 }

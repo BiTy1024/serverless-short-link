@@ -62,20 +62,19 @@ def get_redirect_url(path: str, mappings: Dict[str, str]) -> str:
 
 
 def track_redirect(path: str, target_url: str) -> None:
-    """Track redirect in DynamoDB by incrementing click count."""
+    """Track redirect in DynamoDB by storing individual click event."""
     try:
         table = dynamodb.Table(STATS_TABLE_NAME)
-        response = table.update_item(
-            Key={'redirect_path': path},
-            UpdateExpression='SET target_url = :url, last_accessed = :timestamp ADD click_count :inc',
-            ExpressionAttributeValues={
-                ':url': target_url,
-                ':timestamp': datetime.now(timezone.utc).isoformat(),
-                ':inc': 1
-            },
-            ReturnValues='UPDATED_NEW'
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        table.put_item(
+            Item={
+                'redirect_path': path,
+                'timestamp': timestamp,
+                'target_url': target_url
+            }
         )
-        logger.info(f"Tracked redirect: {path} -> total clicks: {response.get('Attributes', {}).get('click_count', 1)}")
+        logger.info(f"Tracked click: {path} at {timestamp}")
     except Exception as e:
         # Don't fail the redirect if tracking fails
         logger.error(f"Failed to track redirect: {str(e)}")
