@@ -11,5 +11,8 @@
   "/naturstrom": "https://www.naturstrom.de/privatkunden/oekostrom/naturstrom-balkonsolar",
   "/naturstrom/": "https://www.naturstrom.de/privatkunden/oekostrom/naturstrom-balkonsolar",
   "/germering": "https://panelretter.de/pages/sammelbestellung-germering",
-  "/germering/": "https://panelretter.de/pages/sammelbestellung-germering"
+  "/germering/": "https://panelretter.de/pages/sammelbestellung-germering",
+  "/naturstrom-bkw-klein": "https://panelretter.de/products/kleiner-retter-435w-1-modul?variant=56648398176600",
+  "/naturstrom-bkw-standard": "https://panelretter.de/products/standard-retter-870wp-2-module?variant=56648112439640",
+  "/naturstrom-bkw-speicher": "https://panelretter.de/products/maxi-retter-1740w-4-mdoule?variant=56648369668440"
 }
