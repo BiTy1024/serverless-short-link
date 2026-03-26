@@ -39,6 +39,20 @@ Globals:
       - arm64
 
 Resources:
+  LinksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: short_path
+          AttributeType: S
+      KeySchema:
+        - AttributeName: short_path
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-links
+
   RedirectStatsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -61,7 +75,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub ${AWS::StackName}-redirect
-      CodeUri: src/
+      CodeUri: src/redirect/
       Handler: handler.lambda_handler
       Description: Handles URL redirects based on S3 mapping
       Environment:
@@ -99,10 +113,70 @@ Resources:
             Path: /{proxy+}
             Method: ANY
 
+  LinksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-links-api
+      CodeUri: src/links/
+      Handler: handler.lambda_handler
+      Description: CRUD API for managing short links
+      Environment:
+        Variables:
+          LINKS_TABLE_NAME: !Ref LinksTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:DeleteItem
+                - dynamodb:Scan
+                - dynamodb:UpdateItem
+              Resource: !GetAtt LinksTable.Arn
+      Events:
+        ListLinks:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /api/links
+            Method: GET
+        CreateLink:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /api/links
+            Method: POST
+        UpdateLink:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /api/links/{path}
+            Method: PUT
+        DeleteLink:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /api/links/{path}
+            Method: DELETE
+
   RedirectHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - x-api-key
+        MaxAge: 3600
       Domain:
         DomainName: !Ref DomainName
         CertificateArn: !Ref CertificateArn
@@ -113,6 +187,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${RedirectFunction}
+      RetentionInDays: 14
+
+  LinksFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LinksFunction}
       RetentionInDays: 14
 
 Outputs:
@@ -145,3 +225,9 @@ Outputs:
     Value: !Ref RedirectStatsTable
     Export:
       Name: !Sub ${AWS::StackName}-StatsTableName
+
+  LinksTableName:
+    Description: DynamoDB table name for links
+    Value: !Ref LinksTable
+    Export:
+      Name: !Sub ${AWS::StackName}-LinksTableName

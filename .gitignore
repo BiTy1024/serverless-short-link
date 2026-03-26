@@ -1,6 +1,7 @@
 # Customised
 plan.md
 CLAUDE.md
+issues/
 
 .aws-sam
 samconfig.toml
