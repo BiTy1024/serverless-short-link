@@ -13,6 +13,7 @@ table = dynamodb.Table(os.environ['LINKS_TABLE_NAME'])
 
 PATH_PATTERN = re.compile(r'^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$')
 MAX_PATH_LENGTH = 64
+RESERVED_PATHS = {'api', 'admin', 'health', 'status'}
 
 
 def json_response(status_code: int, body: Any = None) -> Dict[str, Any]:
@@ -28,6 +29,8 @@ def json_response(status_code: int, body: Any = None) -> Dict[str, Any]:
 def validate_path(path: str) -> Tuple[bool, str]:
     if not path:
         return False, 'Path is required'
+    if path in RESERVED_PATHS:
+        return False, f"Path '{path}' is reserved and cannot be used as a short link"
     if len(path) > MAX_PATH_LENGTH:
         return False, f'Path must be at most {MAX_PATH_LENGTH} characters'
     if '--' in path:
