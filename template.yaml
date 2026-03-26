@@ -16,15 +16,6 @@ Parameters:
     Type: String
     Description: ACM Certificate ARN for short.panelretter.de (must be in same region)
   
-  RedirectBucket:
-    Type: String
-    Description: S3 bucket containing the redirect mapping file
-  
-  RedirectKey:
-    Type: String
-    Default: redirects.json
-    Description: S3 key for the redirect mapping file
-  
   DefaultRedirectUrl:
     Type: String
     Default: https://panelretter.de
@@ -77,11 +68,12 @@ Resources:
       FunctionName: !Sub ${AWS::StackName}-redirect
       CodeUri: src/redirect/
       Handler: handler.lambda_handler
-      Description: Handles URL redirects based on S3 mapping
+      Description: Handles URL redirects based on DynamoDB lookup
       Environment:
         Variables:
-          REDIRECT_BUCKET: !Ref RedirectBucket
-          REDIRECT_KEY: !Ref RedirectKey
+          POWERTOOLS_SERVICE_NAME: redirect
+          POWERTOOLS_LOG_LEVEL: INFO
+          LINKS_TABLE_NAME: !Ref LinksTable
           DEFAULT_REDIRECT_URL: !Ref DefaultRedirectUrl
           STATS_TABLE_NAME: !Ref RedirectStatsTable
       Policies:
@@ -89,15 +81,11 @@ Resources:
           Statement:
             - Effect: Allow
               Action:
-                - s3:GetObject
-              Resource: !Sub arn:aws:s3:::${RedirectBucket}/${RedirectKey}
+                - dynamodb:GetItem
+              Resource: !GetAtt LinksTable.Arn
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
-                - dynamodb:UpdateItem
-                - dynamodb:GetItem
-                - dynamodb:Query
-                - dynamodb:Scan
               Resource: !GetAtt RedirectStatsTable.Arn
       Events:
         RootPath:
@@ -122,6 +110,8 @@ Resources:
       Description: CRUD API for managing short links
       Environment:
         Variables:
+          POWERTOOLS_SERVICE_NAME: links
+          POWERTOOLS_LOG_LEVEL: INFO
           LINKS_TABLE_NAME: !Ref LinksTable
       Policies:
         - Version: '2012-10-17'

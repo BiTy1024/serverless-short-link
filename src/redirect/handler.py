@@ -1,110 +1,73 @@
-import json
 import os
-import logging
 import boto3
+from aws_lambda_powertools import Logger
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = Logger()
 
-s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
+links_table = dynamodb.Table(os.environ['LINKS_TABLE_NAME'])
+stats_table = dynamodb.Table(os.environ['STATS_TABLE_NAME'])
 
-redirect_mappings: Optional[Dict[str, str]] = None
-
-REDIRECT_BUCKET = os.environ['REDIRECT_BUCKET']
-REDIRECT_KEY = os.environ['REDIRECT_KEY']
 DEFAULT_REDIRECT_URL = os.environ['DEFAULT_REDIRECT_URL']
-STATS_TABLE_NAME = os.environ['STATS_TABLE_NAME']
 
 
-def load_redirects() -> Dict[str, str]:
-    global redirect_mappings
-    
-    if redirect_mappings is not None:
-        return redirect_mappings
-    
-    try:
-        logger.info(f"Loading redirects from s3://{REDIRECT_BUCKET}/{REDIRECT_KEY}")
-        response = s3_client.get_object(Bucket=REDIRECT_BUCKET, Key=REDIRECT_KEY)
-        content = response['Body'].read().decode('utf-8')
-        redirect_mappings = json.loads(content)
-        logger.info(f"Loaded {len(redirect_mappings)} redirect mappings")
-        return redirect_mappings
-    except Exception as e:
-        logger.error(f"Failed to load redirects: {str(e)}")
-        raise
+def get_redirect_url(path: str) -> str:
+    short_path = path.strip('/')
+    if not short_path:
+        return DEFAULT_REDIRECT_URL
 
+    response = links_table.get_item(Key={'short_path': short_path})
+    item = response.get('Item')
+    if item:
+        target_url = item['target_url']
+        logger.info(f"Redirect hit: /{short_path} -> {target_url}")
+        return target_url
 
-def normalize_path(path: str) -> str:
-    if not path:
-        return '/'
-    
-    if not path.startswith('/'):
-        path = '/' + path
-    
-    if len(path) > 1 and path.endswith('/'):
-        path = path.rstrip('/')
-    
-    return path
-
-
-def get_redirect_url(path: str, mappings: Dict[str, str]) -> str:
-    normalized_path = normalize_path(path)
-    
-    if normalized_path in mappings:
-        logger.info(f"Redirect hit: {normalized_path} -> {mappings[normalized_path]}")
-        return mappings[normalized_path]
-    
-    logger.info(f"Redirect miss: {normalized_path}, using default: {DEFAULT_REDIRECT_URL}")
+    logger.info(f"Redirect miss: /{short_path}, using default: {DEFAULT_REDIRECT_URL}")
     return DEFAULT_REDIRECT_URL
 
 
 def track_redirect(path: str, target_url: str) -> None:
-    """Track redirect in DynamoDB by storing individual click event."""
     try:
-        table = dynamodb.Table(STATS_TABLE_NAME)
         timestamp = datetime.now(timezone.utc).isoformat()
-        
-        table.put_item(
+        stats_table.put_item(
             Item={
                 'redirect_path': path,
                 'timestamp': timestamp,
-                'target_url': target_url
+                'target_url': target_url,
             }
         )
         logger.info(f"Tracked click: {path} at {timestamp}")
     except Exception as e:
-        # Don't fail the redirect if tracking fails
         logger.error(f"Failed to track redirect: {str(e)}")
 
 
+@logger.inject_lambda_context
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     try:
         path = event.get('rawPath', '/')
         logger.info(f"Request received for path: {path}")
-        
-        mappings = load_redirects()
-        redirect_url = get_redirect_url(path, mappings)
-        
-        # Track the redirect asynchronously (non-blocking)
-        normalized_path = normalize_path(path)
+
+        redirect_url = get_redirect_url(path)
+
+        normalized_path = '/' + path.strip('/')
         track_redirect(normalized_path, redirect_url)
-        
+
         return {
             'statusCode': 301,
             'headers': {
-                'Location': redirect_url
-            }
+                'Location': redirect_url,
+            },
         }
-    
+
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         return {
             'statusCode': 502,
             'headers': {
-                'Content-Type': 'text/plain'
+                'Content-Type': 'text/plain',
             },
-            'body': 'Service temporarily unavailable'
+            'body': 'Service temporarily unavailable',
         }

@@ -1,12 +1,12 @@
 # Serverless Short Link Service
 
-A serverless URL redirect service built with AWS SAM. Routes incoming requests through API Gateway to Lambda, looks up redirect mappings, and returns 301 redirects. Includes a CRUD API for managing links and click tracking via DynamoDB.
+A serverless URL redirect service built with AWS SAM. Routes incoming requests through API Gateway to Lambda, looks up redirect mappings in DynamoDB, and returns 301 redirects. Includes a CRUD API for managing links and click tracking.
 
 ## Architecture
 
 ```
 Route53 → API Gateway (HTTP API) → Lambda
-                                     ├── Redirect Handler (S3 lookup → 301)
+                                     ├── Redirect Handler (DynamoDB lookup → 301)
                                      └── Links API (DynamoDB CRUD)
 
 Click tracking → DynamoDB (RedirectStatsTable)
@@ -18,16 +18,13 @@ Link storage   → DynamoDB (LinksTable)
 ```
 ├── template.yaml                # SAM/CloudFormation template
 ├── samconfig.example.toml       # Example deployment config
-├── redirects.json               # Static redirect mappings (legacy, for S3)
 ├── src/
 │   ├── redirect/
-│   │   ├── handler.py           # Redirect Lambda (S3 lookup + click tracking)
+│   │   ├── handler.py           # Redirect Lambda (DynamoDB lookup + click tracking)
 │   │   └── requirements.txt
 │   └── links/
 │       ├── handler.py           # Links CRUD API Lambda
 │       └── requirements.txt
-├── scripts/
-│   └── migrate_links.py         # Migrate redirects.json → DynamoDB
 └── query_stats.py               # CLI tool to query click statistics
 ```
 
@@ -120,19 +117,7 @@ aws acm wait certificate-validated \
   --region eu-central-1
 ```
 
-### 3. Create an S3 Bucket for Redirect Mappings
-
-```bash
-aws s3 mb s3://your-redirect-bucket --region eu-central-1
-```
-
-Upload the initial redirect mappings:
-
-```bash
-aws s3 cp redirects.json s3://your-redirect-bucket/redirects.json
-```
-
-### 4. Configure Deployment
+### 3. Configure Deployment
 
 ```bash
 cp samconfig.example.toml samconfig.toml
@@ -145,12 +130,11 @@ parameter_overrides = [
     "DomainName=short.your-domain.de",
     "HostedZoneId=Z1234567890ABC",
     "CertificateArn=arn:aws:acm:eu-central-1:123456789012:certificate/...",
-    "RedirectBucket=your-redirect-bucket",
     "DefaultRedirectUrl=https://your-domain.de"
 ]
 ```
 
-### 5. Build and Deploy
+### 4. Build and Deploy
 
 ```bash
 sam build
@@ -158,14 +142,6 @@ sam deploy
 ```
 
 For first-time deployment, use `sam deploy --guided` and follow the prompts.
-
-### 6. Migrate Existing Links to DynamoDB
-
-After deploying, seed the LinksTable with your existing redirects:
-
-```bash
-python scripts/migrate_links.py
-```
 
 ## Links CRUD API
 
@@ -236,5 +212,4 @@ sam logs -n pr-redirect-service-links-api --tail
 
 ```bash
 sam delete
-aws s3 rb s3://your-redirect-bucket --force
 ```

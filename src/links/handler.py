@@ -1,13 +1,12 @@
 import json
 import os
 import re
-import logging
 import boto3
+from aws_lambda_powertools import Logger
 from datetime import datetime, timezone
 from typing import Dict, Any, Tuple
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = Logger()
 
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ['LINKS_TABLE_NAME'])
@@ -154,6 +153,7 @@ ROUTES = {
 }
 
 
+@logger.inject_lambda_context
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     route_key = event.get('routeKey', '')
     logger.info(f"Request: {route_key}")
