@@ -7,7 +7,8 @@ A serverless URL redirect service built with AWS SAM. Routes incoming requests t
 ```
 Route53 → API Gateway (HTTP API) → Lambda
                                      ├── Redirect Handler (DynamoDB lookup → 301)
-                                     └── Links API (DynamoDB CRUD)
+                                     ├── Links API (DynamoDB CRUD)
+                                     └── Stats API (DynamoDB query)
 
 Click tracking → DynamoDB (RedirectStatsTable)
 Link storage   → DynamoDB (LinksTable)
@@ -22,10 +23,12 @@ Link storage   → DynamoDB (LinksTable)
 │   ├── redirect/
 │   │   ├── handler.py           # Redirect Lambda (DynamoDB lookup + click tracking)
 │   │   └── requirements.txt
-│   └── links/
-│       ├── handler.py           # Links CRUD API Lambda
+│   ├── links/
+│   │   ├── handler.py           # Links CRUD API Lambda
+│   │   └── requirements.txt
+│   └── stats/
+│       ├── handler.py           # Stats API Lambda
 │       └── requirements.txt
-└── query_stats.py               # CLI tool to query click statistics
 ```
 
 ## Prerequisites
@@ -180,14 +183,30 @@ curl -X DELETE https://short.your-domain.de/api/links/example
 - **Path**: lowercase letters, numbers, and hyphens only. 1-64 characters. Must start and end with a letter or number.
 - **URL**: must start with `https://`
 
-## Click Statistics
+## Statistics API
 
-Query click statistics from DynamoDB:
+Query click statistics at `https://short.your-domain.de/api/stats`.
+
+### Overview (all links)
 
 ```bash
-python query_stats.py              # all-time summary
-python query_stats.py /path        # stats for a specific path
-python query_stats.py /path 7      # stats for the last 7 days
+curl https://short.your-domain.de/api/stats
+```
+
+### Stats for a specific link
+
+```bash
+curl https://short.your-domain.de/api/stats/example
+```
+
+### Filter by time period
+
+```bash
+# Last 7 days
+curl "https://short.your-domain.de/api/stats/example?days=7"
+
+# Date range
+curl "https://short.your-domain.de/api/stats/example?from=2025-12-03&to=2026-01-26"
 ```
 
 ## Local Development
@@ -206,6 +225,9 @@ sam logs -n pr-redirect-service-redirect --tail
 
 # Links API logs
 sam logs -n pr-redirect-service-links-api --tail
+
+# Stats API logs
+sam logs -n pr-redirect-service-stats-api --tail
 ```
 
 ## Cleanup

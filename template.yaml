@@ -150,6 +150,40 @@ Resources:
             Path: /api/links/{path}
             Method: DELETE
 
+  StatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-stats-api
+      CodeUri: src/stats/
+      Handler: handler.lambda_handler
+      Description: API for querying click statistics
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: stats
+          POWERTOOLS_LOG_LEVEL: INFO
+          STATS_TABLE_NAME: !Ref RedirectStatsTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource: !GetAtt RedirectStatsTable.Arn
+      Events:
+        StatsOverview:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /api/stats
+            Method: GET
+        StatsDetail:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RedirectHttpApi
+            Path: /api/stats/{path}
+            Method: GET
+
   RedirectHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -183,6 +217,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${LinksFunction}
+      RetentionInDays: 14
+
+  StatsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${StatsFunction}
       RetentionInDays: 14
 
 Outputs:
