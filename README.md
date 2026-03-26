@@ -6,10 +6,11 @@ A serverless URL redirect service built with AWS SAM. Routes incoming requests t
 
 ```
 Route53 → API Gateway (HTTP API) → Lambda
-                                     ├── Redirect Handler (DynamoDB lookup → 301)
-                                     ├── Links API (DynamoDB CRUD)
-                                     └── Stats API (DynamoDB query)
+                                     ├── Redirect Handler (DynamoDB lookup → 301, public)
+                                     ├── Links API (DynamoDB CRUD, auth required)
+                                     └── Stats API (DynamoDB query, auth required)
 
+Auth          → Cognito User Pool + JWT Authorizer
 Click tracking → DynamoDB (RedirectStatsTable)
 Link storage   → DynamoDB (LinksTable)
 ```
@@ -26,8 +27,11 @@ Link storage   → DynamoDB (LinksTable)
 │   ├── links/
 │   │   ├── handler.py           # Links CRUD API Lambda
 │   │   └── requirements.txt
-│   └── stats/
-│       ├── handler.py           # Stats API Lambda
+│   ├── stats/
+│   │   ├── handler.py           # Stats API Lambda
+│   │   └── requirements.txt
+│   └── cert/
+│       ├── handler.py           # Custom resource: cross-region ACM cert
 │       └── requirements.txt
 ```
 
@@ -146,14 +150,44 @@ sam deploy
 
 For first-time deployment, use `sam deploy --guided` and follow the prompts.
 
+## Authentication
+
+All `/api/*` endpoints require a Cognito JWT token. Redirects remain public.
+
+### Create an admin user
+
+```bash
+aws cognito-idp admin-create-user \
+  --user-pool-id YOUR_USER_POOL_ID \
+  --username admin@example.com \
+  --temporary-password "TempPass123!" \
+  --user-attributes Name=email,Value=admin@example.com
+```
+
+### Get an access token (for API testing)
+
+```bash
+# Get token (replace values from stack outputs)
+aws cognito-idp admin-initiate-auth \
+  --user-pool-id YOUR_USER_POOL_ID \
+  --client-id YOUR_CLIENT_ID \
+  --auth-flow ADMIN_USER_PASSWORD_AUTH \
+  --auth-parameters USERNAME=admin@example.com,PASSWORD=YourPassword
+
+# Use the AccessToken from the response:
+curl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  https://short.your-domain.de/api/links
+```
+
 ## Links CRUD API
 
-Manage short links via the API at `https://short.your-domain.de/api/links`.
+Manage short links via the API at `https://short.your-domain.de/api/links`. All requests require an `Authorization: Bearer <token>` header.
 
 ### Create a link
 
 ```bash
 curl -X POST https://short.your-domain.de/api/links \
+  -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"short_path": "example", "target_url": "https://example.com"}'
 ```
@@ -161,13 +195,15 @@ curl -X POST https://short.your-domain.de/api/links \
 ### List all links
 
 ```bash
-curl https://short.your-domain.de/api/links
+curl -H "Authorization: Bearer TOKEN" \
+  https://short.your-domain.de/api/links
 ```
 
 ### Update a link
 
 ```bash
 curl -X PUT https://short.your-domain.de/api/links/example \
+  -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"target_url": "https://new-target.com"}'
 ```
@@ -175,7 +211,8 @@ curl -X PUT https://short.your-domain.de/api/links/example \
 ### Delete a link
 
 ```bash
-curl -X DELETE https://short.your-domain.de/api/links/example
+curl -X DELETE -H "Authorization: Bearer TOKEN" \
+  https://short.your-domain.de/api/links/example
 ```
 
 ### Validation rules
@@ -190,23 +227,27 @@ Query click statistics at `https://short.your-domain.de/api/stats`.
 ### Overview (all links)
 
 ```bash
-curl https://short.your-domain.de/api/stats
+curl -H "Authorization: Bearer TOKEN" \
+  https://short.your-domain.de/api/stats
 ```
 
 ### Stats for a specific link
 
 ```bash
-curl https://short.your-domain.de/api/stats/example
+curl -H "Authorization: Bearer TOKEN" \
+  https://short.your-domain.de/api/stats/example
 ```
 
 ### Filter by time period
 
 ```bash
 # Last 7 days
-curl "https://short.your-domain.de/api/stats/example?days=7"
+curl -H "Authorization: Bearer TOKEN" \
+  "https://short.your-domain.de/api/stats/example?days=7"
 
 # Date range
-curl "https://short.your-domain.de/api/stats/example?from=2025-12-03&to=2026-01-26"
+curl -H "Authorization: Bearer TOKEN" \
+  "https://short.your-domain.de/api/stats/example?from=2025-12-03&to=2026-01-26"
 ```
 
 ## Local Development

@@ -18,7 +18,7 @@ Parameters:
   
   DefaultRedirectUrl:
     Type: String
-    Default: https://panelretter.de
+    Default: https://example.de
     Description: Fallback URL when no mapping is found
 
 Globals:
@@ -62,6 +62,68 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName}-redirect-stats
 
+  # --- Cognito ---
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${AWS::StackName}-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub ${AWS::StackName}-web
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+
+
+  # --- Cross-region ACM Certificate for admin frontend ---
+
+  AdminCertFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-admin-cert
+      CodeUri: src/cert/
+      Handler: handler.lambda_handler
+      Description: Custom resource to create ACM certificate in us-east-1 for cloudfront
+      Timeout: 300
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - acm:RequestCertificate
+                - acm:DescribeCertificate
+                - acm:DeleteCertificate
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - route53:ChangeResourceRecordSets
+                - route53:GetHostedZone
+              Resource: !Sub arn:aws:route53:::hostedzone/${HostedZoneId}
+
+  AdminCertificate:
+    Type: Custom::AdminCertificate
+    Properties:
+      ServiceToken: !GetAtt AdminCertFunction.Arn
+      DomainName: !Sub admin.${DomainName}
+      HostedZoneId: !Ref HostedZoneId
+
+  # --- Lambda Functions ---
+
   RedirectFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -94,12 +156,16 @@ Resources:
             ApiId: !Ref RedirectHttpApi
             Path: /
             Method: ANY
+            Auth:
+              Authorizer: NONE
         ProxyPath:
           Type: HttpApi
           Properties:
             ApiId: !Ref RedirectHttpApi
             Path: /{proxy+}
             Method: ANY
+            Auth:
+              Authorizer: NONE
 
   LinksFunction:
     Type: AWS::Serverless::Function
@@ -188,9 +254,18 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}
+              audience:
+                - !Ref CognitoUserPoolClient
       CorsConfiguration:
         AllowOrigins:
-          - "*"
+          - !Sub "https://admin.${DomainName}"
         AllowMethods:
           - GET
           - POST
@@ -199,8 +274,27 @@ Resources:
           - OPTIONS
         AllowHeaders:
           - Content-Type
-          - x-api-key
+          - Authorization
         MaxAge: 3600
+      RouteSettings:
+        "GET /api/links":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
+        "POST /api/links":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
+        "PUT /api/links/{path}":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
+        "DELETE /api/links/{path}":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
+        "GET /api/stats":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
+        "GET /api/stats/{path}":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 100
       Domain:
         DomainName: !Ref DomainName
         CertificateArn: !Ref CertificateArn
@@ -223,6 +317,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${StatsFunction}
+      RetentionInDays: 14
+
+  AdminCertFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AdminCertFunction}
       RetentionInDays: 14
 
 Outputs:
@@ -261,3 +361,23 @@ Outputs:
     Value: !Ref LinksTable
     Export:
       Name: !Sub ${AWS::StackName}-LinksTableName
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
+
+  AdminDomainUrl:
+    Description: Admin frontend URL
+    Value: !Sub https://admin.${DomainName}
+
+  AdminCertificateArn:
+    Description: ACM Certificate ARN for admin domain (us-east-1)
+    Value: !GetAtt AdminCertificate.CertificateArn
