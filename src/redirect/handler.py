@@ -11,6 +11,7 @@ links_table = dynamodb.Table(os.environ['LINKS_TABLE_NAME'])
 stats_table = dynamodb.Table(os.environ['STATS_TABLE_NAME'])
 
 DEFAULT_REDIRECT_URL = os.environ['DEFAULT_REDIRECT_URL']
+ADMIN_ORIGIN = os.environ.get('ADMIN_ORIGIN', '*')
 
 
 def get_redirect_url(path: str) -> str:
@@ -49,6 +50,22 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     try:
         path = event.get('rawPath', '/')
         logger.info(f"Request received for path: {path}")
+
+        if path.startswith('/api'):
+            method = event.get('requestContext', {}).get('http', {}).get('method', '')
+            cors_headers = {
+                'Access-Control-Allow-Origin': ADMIN_ORIGIN,
+                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                'Access-Control-Max-Age': '3600',
+            }
+            if method == 'OPTIONS':
+                return {'statusCode': 200, 'headers': cors_headers}
+            return {
+                'statusCode': 404,
+                'headers': {**cors_headers, 'Content-Type': 'application/json'},
+                'body': '{"error": "Not found"}',
+            }
 
         redirect_url = get_redirect_url(path)
 
