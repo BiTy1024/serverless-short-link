@@ -92,7 +92,7 @@ export default function LinkDetail() {
               <Line
                 type="monotone"
                 dataKey="clicks"
-                stroke="#2A1058"
+                stroke="var(--color-accent)"
                 strokeWidth={2}
                 dot={false}
               />

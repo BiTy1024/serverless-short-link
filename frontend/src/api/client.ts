@@ -5,7 +5,7 @@ const API_BASE = import.meta.env.VITE_API_BASE
 async function getToken(): Promise<string> {
   const session = await fetchAuthSession()
   const token = session.tokens?.accessToken?.toString() ?? ''
-  if (!token) console.warn('No access token found in session', session)
+  if (!token) console.warn('No access token found in session')
   return token
 }
 
@@ -19,6 +19,10 @@ async function request(path: string, options: RequestInit = {}) {
       ...options.headers,
     },
   })
+  if (res.status === 401 || res.status === 403) {
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.error || `HTTP ${res.status}`)

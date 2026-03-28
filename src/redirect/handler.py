@@ -11,7 +11,7 @@ links_table = dynamodb.Table(os.environ['LINKS_TABLE_NAME'])
 stats_table = dynamodb.Table(os.environ['STATS_TABLE_NAME'])
 
 DEFAULT_REDIRECT_URL = os.environ['DEFAULT_REDIRECT_URL']
-ADMIN_ORIGIN = os.environ.get('ADMIN_ORIGIN', '*')
+ADMIN_ORIGIN = os.environ['ADMIN_ORIGIN']
 
 
 def get_redirect_url(path: str) -> tuple[str, bool]:
