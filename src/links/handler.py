@@ -155,6 +155,16 @@ ROUTES = {
     'DELETE /api/links/{path}': handle_delete,
 }
 
+WRITE_ROUTES = {'POST /api/links', 'PUT /api/links/{path}', 'DELETE /api/links/{path}'}
+
+
+def get_user_groups(event: Dict[str, Any]) -> list[str]:
+    claims = event.get('requestContext', {}).get('authorizer', {}).get('jwt', {}).get('claims', {})
+    groups = claims.get('cognito:groups', '')
+    if not groups:
+        return []
+    return groups.strip('[]').replace(' ', '').split(',') if isinstance(groups, str) else groups
+
 
 @logger.inject_lambda_context
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -164,6 +174,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     handler = ROUTES.get(route_key)
     if not handler:
         return json_response(404, {'error': 'Route not found'})
+
+    if route_key in WRITE_ROUTES:
+        groups = get_user_groups(event)
+        if 'admin' not in groups:
+            return json_response(403, {'error': 'Admin access required'})
 
     try:
         return handler(event)

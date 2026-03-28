@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { api, type Link } from '../api/client'
+import { useAuth } from '../auth/AuthProvider'
 
 const DOMAIN = import.meta.env.VITE_API_BASE
 
@@ -19,6 +20,7 @@ function downloadQR(shortPath: string) {
 }
 
 export default function Links() {
+  const { isAdmin } = useAuth()
   const [links, setLinks] = useState<Link[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -82,8 +84,9 @@ export default function Links() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold tracking-tight text-text">Links</h1>
         <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="bg-accent text-white rounded px-3 py-1.5 text-sm font-medium hover:bg-accent-light cursor-pointer"
+          onClick={() => isAdmin && setShowCreate(!showCreate)}
+          disabled={!isAdmin}
+          className={`rounded px-3 py-1.5 text-sm font-medium ${isAdmin ? 'bg-accent text-white hover:bg-accent-light cursor-pointer' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
         >
           {showCreate ? 'Cancel' : 'Create'}
         </button>
@@ -172,14 +175,16 @@ export default function Links() {
                     Stats
                   </RouterLink>
                   <button
-                    onClick={() => { setEditPath(link.short_path); setEditUrl(link.target_url) }}
-                    className="text-sm text-text-muted hover:text-text cursor-pointer"
+                    onClick={() => isAdmin && (setEditPath(link.short_path), setEditUrl(link.target_url))}
+                    disabled={!isAdmin}
+                    className={`text-sm ${isAdmin ? 'text-text-muted hover:text-text cursor-pointer' : 'text-gray-300 cursor-not-allowed'}`}
                   >
                     Edit
                   </button>
                   <button
-                    onClick={() => handleDelete(link.short_path)}
-                    className="text-sm text-red-500 hover:text-red-700 cursor-pointer"
+                    onClick={() => isAdmin && handleDelete(link.short_path)}
+                    disabled={!isAdmin}
+                    className={`text-sm ${isAdmin ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-not-allowed'}`}
                   >
                     Delete
                   </button>

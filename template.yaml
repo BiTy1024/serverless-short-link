@@ -82,6 +82,19 @@ Resources:
       Policies:
         PasswordPolicy:
           MinimumLength: 8
+  CognitoAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      UserPoolId: !Ref CognitoUserPool
+      Description: Full access to all API operations
+
+  CognitoViewerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: viewer
+      UserPoolId: !Ref CognitoUserPool
+      Description: Read-only access to links and statistics
 
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient

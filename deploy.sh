@@ -14,21 +14,33 @@ else
   echo "=== Backend deployed ==="
 fi
 
+echo "=== Getting stack outputs ==="
+OUTPUTS=$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs' \
+  --output json --region "$REGION")
+
+get_output() {
+  echo "$OUTPUTS" | python3 -c "import sys,json; print(next(o['OutputValue'] for o in json.load(sys.stdin) if o['OutputKey']=='$1'))"
+}
+
+BUCKET=$(get_output AdminBucketName)
+DIST_ID=$(get_output AdminDistributionId)
+API_BASE=$(get_output CustomDomainUrl)
+USER_POOL_ID=$(get_output UserPoolId)
+CLIENT_ID=$(get_output UserPoolClientId)
+
+echo "=== Generating frontend/.env ==="
+cat > frontend/.env <<EOL
+VITE_API_BASE=$API_BASE
+VITE_USER_POOL_ID=$USER_POOL_ID
+VITE_USER_POOL_CLIENT_ID=$CLIENT_ID
+EOL
+
 echo "=== Building frontend ==="
 cd frontend
 npm run build
 cd ..
-
-echo "=== Getting stack outputs ==="
-BUCKET=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`AdminBucketName`].OutputValue' \
-  --output text --region "$REGION")
-
-DIST_ID=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`AdminDistributionId`].OutputValue' \
-  --output text --region "$REGION")
 
 echo "=== Uploading to S3: $BUCKET ==="
 aws s3 sync frontend/dist/ "s3://$BUCKET" --delete --region "$REGION"
@@ -39,7 +51,5 @@ aws cloudfront create-invalidation \
   --paths "/*" > /dev/null
 
 echo "=== Done ==="
-echo "Admin frontend: https://admin.$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`AdminDomainUrl`].OutputValue' \
-  --output text --region "$REGION" | sed 's|https://||')"
+ADMIN_URL=$(get_output AdminDomainUrl)
+echo "Admin frontend: $ADMIN_URL"
