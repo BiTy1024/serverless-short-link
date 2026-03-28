@@ -8,7 +8,11 @@ echo "=== Building backend ==="
 sam build
 
 echo "=== Deploying backend ==="
-sam deploy
+if sam deploy 2>&1 | tee /dev/stderr | grep -q "No changes to deploy"; then
+  echo "=== No backend changes, skipping ==="
+else
+  echo "=== Backend deployed ==="
+fi
 
 echo "=== Building frontend ==="
 cd frontend

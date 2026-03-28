@@ -1,6 +1,22 @@
 import { useEffect, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
+import QRCode from 'qrcode'
 import { api, type Link } from '../api/client'
+
+const DOMAIN = import.meta.env.VITE_API_BASE
+
+function downloadQR(shortPath: string) {
+  const url = `${DOMAIN}/${shortPath}`
+  QRCode.toString(url, { type: 'svg', margin: 1 }, (err, svg) => {
+    if (err) return
+    const blob = new Blob([svg], { type: 'image/svg+xml' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `qr-${shortPath}.svg`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  })
+}
 
 export default function Links() {
   const [links, setLinks] = useState<Link[]>([])
@@ -149,6 +165,12 @@ export default function Links() {
                   <span className="flex-1 text-sm text-text-muted truncate">
                     {link.target_url}
                   </span>
+                  <RouterLink
+                    to={`/links/${link.short_path}`}
+                    className="text-sm text-text-muted hover:text-text cursor-pointer"
+                  >
+                    Stats
+                  </RouterLink>
                   <button
                     onClick={() => { setEditPath(link.short_path); setEditUrl(link.target_url) }}
                     className="text-sm text-text-muted hover:text-text cursor-pointer"
@@ -160,6 +182,12 @@ export default function Links() {
                     className="text-sm text-red-500 hover:text-red-700 cursor-pointer"
                   >
                     Delete
+                  </button>
+                  <button
+                    onClick={() => downloadQR(link.short_path)}
+                    className="text-sm text-text-muted hover:text-text cursor-pointer"
+                  >
+                    QR
                   </button>
                 </>
               )}
