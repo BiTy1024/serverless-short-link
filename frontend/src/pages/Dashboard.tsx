@@ -46,7 +46,7 @@ export default function Dashboard() {
                 width={80}
               />
               <Tooltip />
-              <Bar dataKey="clicks" fill="#2A1058" radius={[0, 2, 2, 0]} />
+              <Bar dataKey="clicks" fill="var(--color-accent)" radius={[0, 2, 2, 0]} />
             </BarChart>
           </ResponsiveContainer>
         )}

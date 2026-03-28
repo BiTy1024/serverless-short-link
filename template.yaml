@@ -37,6 +37,8 @@ Globals:
 Resources:
   LinksTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
@@ -51,6 +53,8 @@ Resources:
 
   RedirectStatsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
@@ -82,6 +86,19 @@ Resources:
       Policies:
         PasswordPolicy:
           MinimumLength: 8
+  CognitoAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      UserPoolId: !Ref CognitoUserPool
+      Description: Full access to all API operations
+
+  CognitoViewerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: viewer
+      UserPoolId: !Ref CognitoUserPool
+      Description: Read-only access to links and statistics
 
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -105,6 +122,10 @@ Resources:
       Handler: handler.lambda_handler
       Description: Custom resource to create ACM certificate in us-east-1 for cloudfront
       Timeout: 300
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: cert
+          POWERTOOLS_LOG_LEVEL: INFO
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -234,6 +255,7 @@ Resources:
           POWERTOOLS_SERVICE_NAME: stats
           POWERTOOLS_LOG_LEVEL: INFO
           STATS_TABLE_NAME: !Ref RedirectStatsTable
+          LINKS_TABLE_NAME: !Ref LinksTable
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -242,6 +264,10 @@ Resources:
                 - dynamodb:Query
                 - dynamodb:Scan
               Resource: !GetAtt RedirectStatsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+              Resource: !GetAtt LinksTable.Arn
       Events:
         StatsOverview:
           Type: HttpApi
@@ -272,7 +298,6 @@ Resources:
       CorsConfiguration:
         AllowOrigins:
           - !Sub "https://admin.${DomainName}"
-          - "http://localhost:5173"
         AllowMethods:
           - GET
           - POST
@@ -312,30 +337,32 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${RedirectFunction}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   LinksFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${LinksFunction}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   StatsFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${StatsFunction}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   AdminCertFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${AdminCertFunction}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   # --- Admin Frontend Hosting ---
 
   AdminBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub ${AWS::StackName}-admin-frontend
       PublicAccessBlockConfiguration:

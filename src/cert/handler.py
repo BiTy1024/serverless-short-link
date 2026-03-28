@@ -1,17 +1,16 @@
 import json
 import time
 import boto3
-import logging
 import urllib.request
+from aws_lambda_powertools import Logger
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = Logger()
 
 acm = boto3.client('acm', region_name='us-east-1')
 route53 = boto3.client('route53')
 
-#Timout makes sense to minimize deploy time
-TIMEOUT = 600  
+# Timeout for certificate validation during deploy
+TIMEOUT = 600
 
 
 def send_response(event, context, status, data=None, reason=None):

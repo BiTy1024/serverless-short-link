@@ -11,6 +11,7 @@ logger = Logger()
 
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ['STATS_TABLE_NAME'])
+links_table = dynamodb.Table(os.environ['LINKS_TABLE_NAME'])
 
 
 def json_response(status_code: int, body: Any = None) -> Dict[str, Any]:
@@ -73,8 +74,27 @@ def parse_time_filters(query_params: dict) -> tuple[Optional[str], Optional[str]
     return None, None
 
 
+def get_known_link_paths() -> set[str]:
+    paths = set()
+    response = links_table.scan(ProjectionExpression='short_path')
+    for item in response.get('Items', []):
+        paths.add('/' + item['short_path'])
+    while 'LastEvaluatedKey' in response:
+        response = links_table.scan(
+            ProjectionExpression='short_path',
+            ExclusiveStartKey=response['LastEvaluatedKey'],
+        )
+        for item in response.get('Items', []):
+            paths.add('/' + item['short_path'])
+    return paths
+
+
 def handle_overview(event: Dict[str, Any]) -> Dict[str, Any]:
+    query_params = event.get('queryStringParameters') or {}
+    linked_only = query_params.get('linked_only', 'false').lower() == 'true'
+
     items = scan_all_clicks()
+    known_paths = get_known_link_paths() if linked_only else None
 
     stats = defaultdict(lambda: {
         'clicks': 0, 'target_url': None, 'first_click': None, 'last_click': None,
@@ -82,6 +102,8 @@ def handle_overview(event: Dict[str, Any]) -> Dict[str, Any]:
 
     for item in items:
         path = item['redirect_path']
+        if known_paths is not None and path not in known_paths:
+            continue
         timestamp = item['timestamp']
         stats[path]['clicks'] += 1
         stats[path]['target_url'] = item.get('target_url')
@@ -96,7 +118,8 @@ def handle_overview(event: Dict[str, Any]) -> Dict[str, Any]:
         reverse=True,
     )
 
-    return json_response(200, {'stats': result, 'total_clicks': len(items)})
+    total = sum(s['clicks'] for s in result)
+    return json_response(200, {'stats': result, 'total_clicks': total})
 
 
 def handle_detail(event: Dict[str, Any]) -> Dict[str, Any]:
