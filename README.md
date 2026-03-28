@@ -250,12 +250,30 @@ curl -H "Authorization: Bearer TOKEN" \
   "https://short.your-domain.de/api/stats/example?from=2025-12-03&to=2026-01-26"
 ```
 
-## Local Development
+## Admin Frontend
+
+The admin dashboard is a React SPA hosted on `admin.short.your-domain.de` via S3 + CloudFront.
+
+### Deploy everything (backend + frontend)
 
 ```bash
-sam build
-sam local start-api
-curl -I http://localhost:3000/mieter
+./deploy.sh
+```
+
+### Frontend development
+
+```bash
+cd frontend
+cp .env.example .env   # Fill in your values
+npm run dev             # Starts dev server at localhost:5173
+```
+
+### Frontend-only deploy
+
+```bash
+cd frontend && npm run build && cd ..
+aws s3 sync frontend/dist/ s3://BUCKET_NAME --delete
+aws cloudfront create-invalidation --distribution-id DIST_ID --paths "/*"
 ```
 
 ## Monitoring
