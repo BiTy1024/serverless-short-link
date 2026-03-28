@@ -72,7 +72,7 @@ export const api = {
     request(`/api/links/${path}`, { method: 'DELETE' }),
 
   getStats: (): Promise<StatsOverview> =>
-    request('/api/stats'),
+    request('/api/stats?linked_only=true'),
 
   getStatsByPath: (path: string, params?: { days?: number; from?: string; to?: string }): Promise<StatsDetail> => {
     const query = new URLSearchParams()

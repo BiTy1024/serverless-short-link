@@ -234,6 +234,7 @@ Resources:
           POWERTOOLS_SERVICE_NAME: stats
           POWERTOOLS_LOG_LEVEL: INFO
           STATS_TABLE_NAME: !Ref RedirectStatsTable
+          LINKS_TABLE_NAME: !Ref LinksTable
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -242,6 +243,10 @@ Resources:
                 - dynamodb:Query
                 - dynamodb:Scan
               Resource: !GetAtt RedirectStatsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+              Resource: !GetAtt LinksTable.Arn
       Events:
         StatsOverview:
           Type: HttpApi

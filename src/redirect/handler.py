@@ -14,20 +14,20 @@ DEFAULT_REDIRECT_URL = os.environ['DEFAULT_REDIRECT_URL']
 ADMIN_ORIGIN = os.environ.get('ADMIN_ORIGIN', '*')
 
 
-def get_redirect_url(path: str) -> str:
+def get_redirect_url(path: str) -> tuple[str, bool]:
     short_path = path.strip('/')
     if not short_path:
-        return DEFAULT_REDIRECT_URL
+        return DEFAULT_REDIRECT_URL, False
 
     response = links_table.get_item(Key={'short_path': short_path})
     item = response.get('Item')
     if item:
         target_url = item['target_url']
         logger.info(f"Redirect hit: /{short_path} -> {target_url}")
-        return target_url
+        return target_url, True
 
     logger.info(f"Redirect miss: /{short_path}, using default: {DEFAULT_REDIRECT_URL}")
-    return DEFAULT_REDIRECT_URL
+    return DEFAULT_REDIRECT_URL, False
 
 
 def track_redirect(path: str, target_url: str) -> None:
@@ -67,10 +67,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'body': '{"error": "Not found"}',
             }
 
-        redirect_url = get_redirect_url(path)
+        redirect_url, is_known_link = get_redirect_url(path)
 
-        normalized_path = '/' + path.strip('/')
-        track_redirect(normalized_path, redirect_url)
+        if is_known_link:
+            normalized_path = '/' + path.strip('/')
+            track_redirect(normalized_path, redirect_url)
 
         return {
             'statusCode': 301,
