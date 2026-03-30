@@ -500,3 +500,7 @@ Outputs:
   AdminDistributionId:
     Description: CloudFront distribution ID for admin frontend
     Value: !Ref AdminDistribution
+
+  AccentColor:
+    Description: Accent color for the admin frontend
+    Value: !Ref AccentColor
