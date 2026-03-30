@@ -5,6 +5,7 @@ issues/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+*.samconfig.toml
 
 .aws-sam
 samconfig.toml
