@@ -15,6 +15,7 @@ samconfig.toml
 # (commit .terraform.lock.hcl for reproducible provider versions)
 terraform/.terraform/
 terraform/bootstrap/.terraform/
+terraform/builds/
 *.tfstate
 *.tfstate.*
 *.tfplan

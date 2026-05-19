@@ -19,11 +19,6 @@ variable "hosted_zone_id" {
   description = "Route53 hosted zone id for the parent domain"
 }
 
-variable "certificate_arn" {
-  type        = string
-  description = "ACM certificate ARN in var.aws_region for var.domain_name"
-}
-
 variable "default_redirect_url" {
   type        = string
   description = "Fallback URL when no mapping is found"

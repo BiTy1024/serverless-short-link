@@ -1,9 +1,20 @@
 # Serverless Short Link Service
 
-Serverless URL shortener with admin dashboard. For tracking usage of links, creating readable links and flexible integration with other websites while controlling the target. Built with Python, React, and DynamoDB on AWS — deployable via **SAM or Terraform**.
+Serverless URL shortener with admin dashboard — create readable short links, control their targets, and track click analytics. Built with Python, React, and DynamoDB on AWS, deployable via **SAM or Terraform**.
 
 **Live demo**: [admin.short.bookpass.de](https://admin.short.bookpass.de)
 View-only login: `demo@short.bookpass.de` / `demo1234`
+
+## Highlights
+
+- **Two equivalent IaC paths** — the full stack ships as both an AWS SAM template and a modular Terraform configuration; pick either, get identical infrastructure.
+- **Auth & roles** — Cognito JWT authorizer on the API, with `admin` (full CRUD) and `viewer` (read-only) groups.
+- **Public redirects, protected admin** — redirect routes are open; every `/api/*` route is authenticated, CORS-locked to the admin origin, and rate-limited per route.
+- **Private SPA hosting** — React dashboard served via CloudFront with Origin Access Control over a fully private S3 bucket.
+- **Click analytics** — every redirect is recorded to DynamoDB (non-blocking, so tracking never breaks a redirect).
+- **Structured logging** — all Lambdas use AWS Lambda Powertools for JSON logs.
+
+> Terraform note: the CloudFront cert (us-east-1) and API cert (regional) are both provisioned natively via provider aliasing + DNS validation — no custom-resource Lambda, unlike the SAM template.
 
 
 ## Setup
@@ -81,9 +92,9 @@ Stats support `?days=N`, `?from=YYYY-MM-DD&to=YYYY-MM-DD`, and `?linked_only=tru
 
 ### Login
 ![Login](assets/login.png)
-### Dashbord
+### Dashboard
 ![Dashboard](assets/dashboard.png)
-### Link Managment
+### Link Management
 ![Links](assets/links.png)
-### Link stats
+### Link Stats
 ![Link Detail](assets/link-detail.png)

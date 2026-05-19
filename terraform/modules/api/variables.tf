@@ -18,11 +18,6 @@ variable "hosted_zone_id" {
   description = "Route53 hosted zone id"
 }
 
-variable "certificate_arn" {
-  type        = string
-  description = "ACM certificate ARN in the same region as the API"
-}
-
 variable "admin_origin" {
   type        = string
   description = "Origin allowed by CORS (https://admin.<domain>)"

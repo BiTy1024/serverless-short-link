@@ -1,3 +1,36 @@
+# --- Regional ACM cert for the API custom domain ---
+
+resource "aws_acm_certificate" "api" {
+  domain_name       = var.domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "api_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.api.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  }
+
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "api" {
+  certificate_arn         = aws_acm_certificate.api.arn
+  validation_record_fqdns = [for r in aws_route53_record.api_cert_validation : r.fqdn]
+}
+
 resource "aws_apigatewayv2_api" "this" {
   name          = "${var.stack_name}-api"
   protocol_type = "HTTP"
@@ -139,6 +172,16 @@ resource "aws_apigatewayv2_stage" "default" {
       throttling_rate_limit  = 100
     }
   }
+
+  # route_settings references routes by key (string), creating no implicit
+  # graph edge — without this the stage races route creation and CreateStage
+  # fails with "Unable to find Route by key".
+  depends_on = [
+    aws_apigatewayv2_route.redirect_root,
+    aws_apigatewayv2_route.redirect_proxy,
+    aws_apigatewayv2_route.links,
+    aws_apigatewayv2_route.stats,
+  ]
 }
 
 # --- Custom domain ---
@@ -147,7 +190,7 @@ resource "aws_apigatewayv2_domain_name" "this" {
   domain_name = var.domain_name
 
   domain_name_configuration {
-    certificate_arn = var.certificate_arn
+    certificate_arn = aws_acm_certificate_validation.api.certificate_arn
     endpoint_type   = "REGIONAL"
     security_policy = "TLS_1_2"
   }

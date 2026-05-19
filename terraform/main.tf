@@ -102,7 +102,6 @@ module "api" {
   aws_region          = var.aws_region
   domain_name         = var.domain_name
   hosted_zone_id      = var.hosted_zone_id
-  certificate_arn     = var.certificate_arn
   admin_origin        = "https://${local.admin_domain}"
   user_pool_id        = module.auth.user_pool_id
   user_pool_client_id = module.auth.user_pool_client_id
