@@ -1,6 +1,6 @@
 # Serverless Short Link Service
 
-Serverless URL shortener with admin dashboard. For tracking usage of links, creating readable links and flexible integration with other websites while controlling the target. Built with AWS SAM, Python, React, and DynamoDB.
+Serverless URL shortener with admin dashboard. For tracking usage of links, creating readable links and flexible integration with other websites while controlling the target. Built with Python, React, and DynamoDB on AWS — deployable via **SAM or Terraform**.
 
 **Live demo**: [admin.short.bookpass.de](https://admin.short.bookpass.de)
 View-only login: `demo@short.bookpass.de` / `demo1234`
@@ -8,12 +8,33 @@ View-only login: `demo@short.bookpass.de` / `demo1234`
 
 ## Setup
 
+Pick one of two deployment paths. Both provision equivalent infrastructure.
+
+### Option A — SAM (default)
+
 ```bash
 cp samconfig.example.toml samconfig.toml  # Fill in your values
 ./deploy.sh                               # Deploys backend + frontend
 ```
 
 **Prerequisites**: AWS CLI, SAM CLI, Python 3.12, Node.js
+
+### Option B — Terraform
+
+```bash
+# One-time: bootstrap the remote state backend (S3 + DynamoDB lock)
+cd terraform/bootstrap
+terraform init && terraform apply -var "state_bucket_name=YOUR-UNIQUE-BUCKET"
+# copy the printed backend_config_snippet into terraform/backend.hcl
+cd ../..
+
+cp terraform/envs/example.tfvars terraform/envs/myenv.tfvars  # fill in values
+./deploy.sh --iac=terraform --config=terraform/envs/myenv.tfvars
+```
+
+**Prerequisites**: AWS CLI, Terraform >= 1.6, Python 3.12, Node.js
+
+See [`terraform/README.md`](terraform/README.md) for the resource layout and trade-offs vs. SAM.
 
 ## API
 

@@ -10,6 +10,19 @@ frontend/.env
 .aws-sam
 samconfig.toml
 /samconfig.toml
+
+# Terraform
+# (commit .terraform.lock.hcl for reproducible provider versions)
+terraform/.terraform/
+terraform/bootstrap/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform/backend.hcl
+terraform/envs/*.tfvars
+!terraform/envs/example.tfvars
+crash.log
+crash.*.log
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
