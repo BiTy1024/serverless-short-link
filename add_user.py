@@ -22,9 +22,10 @@ def get_user_pool_id(stack_name):
     sys.exit("UserPoolId not found in stack outputs")
 
 
-def add_user(email, password, stack_name, group=None):
+def add_user(email, password, stack_name, group=None, pool_id=None):
     cognito = boto3.client("cognito-idp", region_name=REGION)
-    pool_id = get_user_pool_id(stack_name)
+    if pool_id is None:
+        pool_id = get_user_pool_id(stack_name)
 
     cognito.admin_create_user(
         UserPoolId=pool_id,
@@ -64,6 +65,10 @@ if __name__ == "__main__":
     parser.add_argument("--password", required=True)
     parser.add_argument("--group", choices=["admin", "viewer"])
     parser.add_argument("--stack", default=DEFAULT_STACK_NAME)
+    parser.add_argument(
+        "--user-pool-id",
+        help="Use this pool id directly (skips CloudFormation lookup; for Terraform deploys)",
+    )
     args = parser.parse_args()
 
-    add_user(args.email, args.password, args.stack, args.group)
+    add_user(args.email, args.password, args.stack, args.group, args.user_pool_id)

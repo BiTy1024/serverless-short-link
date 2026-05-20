@@ -1,0 +1,6 @@
+stack_name           = "pr-redirect-service"
+aws_region           = "eu-central-1"
+domain_name          = "short.your-domain.de"
+hosted_zone_id       = "YOUR_HOSTED_ZONE_ID"
+default_redirect_url = "https://your-default-redirect.de"
+accent_color         = "#2A1058"
