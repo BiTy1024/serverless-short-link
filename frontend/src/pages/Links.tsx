@@ -4,9 +4,6 @@ import QRCode from 'qrcode'
 import { api, shortUrl, type Link } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 
-// NEW_DOMAIN is the select value that switches the create form to free-text domain entry.
-const NEW_DOMAIN = '__new__'
-
 function linkKey(link: Pick<Link, 'domain' | 'slug'>) {
   return `${link.domain}/${link.slug}`
 }
@@ -36,8 +33,8 @@ export default function Links() {
   const [showCreate, setShowCreate] = useState(false)
   const [editKey, setEditKey] = useState<string | null>(null)
   const [editUrl, setEditUrl] = useState('')
+  const [activeDomains, setActiveDomains] = useState<string[]>([])
   const [newDomainChoice, setNewDomainChoice] = useState('')
-  const [newDomainText, setNewDomainText] = useState('')
   const [newSlug, setNewSlug] = useState('')
   const [newUrl, setNewUrl] = useState('')
   const [error, setError] = useState('')
@@ -46,13 +43,18 @@ export default function Links() {
     api.getLinks().then((data) => setLinks(data.links)).finally(() => setLoading(false))
   }
 
-  useEffect(() => { loadLinks() }, [])
+  useEffect(() => {
+    loadLinks()
+    api.getDomains()
+      .then((data) => setActiveDomains(data.domains.filter((d) => d.status === 'active').map((d) => d.domain)))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Loading domains failed'))
+  }, [])
 
-  // The domains offered in the filter and the create form are the ones that
-  // already have links.
+  // The filter offers every domain that has links or is active; the create
+  // form offers the active domains, in the order the API lists them.
   const domains = useMemo(
-    () => [...new Set(links.map((l) => l.domain))].sort(),
-    [links]
+    () => [...new Set([...links.map((l) => l.domain), ...activeDomains])].sort(),
+    [links, activeDomains]
   )
 
   const query = search.toLowerCase()
@@ -66,17 +68,14 @@ export default function Links() {
     )
     .sort((a, b) => linkKey(a).localeCompare(linkKey(b)))
 
-  const domainChoice = newDomainChoice || domains[0] || NEW_DOMAIN
-  const newDomain = domainChoice === NEW_DOMAIN ? newDomainText : domainChoice
+  const newDomain = activeDomains.includes(newDomainChoice) ? newDomainChoice : activeDomains[0] ?? ''
 
   const handleCreate = async () => {
     setError('')
     try {
-      await api.createLink(newDomain.trim(), newSlug, newUrl)
+      await api.createLink(newDomain, newSlug, newUrl)
       setNewSlug('')
       setNewUrl('')
-      setNewDomainText('')
-      setNewDomainChoice('')
       setShowCreate(false)
       loadLinks()
     } catch (err: unknown) {
@@ -131,24 +130,15 @@ export default function Links() {
           <div className="flex flex-wrap gap-3">
             <select
               aria-label="Domain"
-              value={domainChoice}
+              value={newDomain}
               onChange={(e) => setNewDomainChoice(e.target.value)}
               className="border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent"
             >
-              {domains.map((d) => (
+              {activeDomains.length === 0 && <option value="">No active domain</option>}
+              {activeDomains.map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
-              <option value={NEW_DOMAIN}>Other domain…</option>
             </select>
-            {domainChoice === NEW_DOMAIN && (
-              <input
-                aria-label="New domain"
-                placeholder="go.example.com"
-                value={newDomainText}
-                onChange={(e) => setNewDomainText(e.target.value)}
-                className="flex-1 border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent"
-              />
-            )}
             <input
               aria-label="Slug"
               placeholder="slug"
@@ -171,7 +161,7 @@ export default function Links() {
             </button>
           </div>
           {newDomain && newSlug && (
-            <p className="text-xs text-text-muted font-mono">{shortUrl(newDomain.trim().toLowerCase(), newSlug)}</p>
+            <p className="text-xs text-text-muted font-mono">{shortUrl(newDomain, newSlug)}</p>
           )}
         </div>
       )}

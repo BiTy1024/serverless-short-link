@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Links from './pages/Links'
 import LinkDetail from './pages/LinkDetail'
+import Domains from './pages/Domains'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/links" element={<Links />} />
         <Route path="/links/:domain/:slug" element={<LinkDetail />} />
+        <Route path="/settings/domains" element={<Domains />} />
       </Route>
     </Routes>
   )

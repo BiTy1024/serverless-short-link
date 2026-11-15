@@ -28,6 +28,14 @@ export default function Layout() {
               >
                 Links
               </NavLink>
+              <NavLink
+                to="/settings/domains"
+                className={({ isActive }) =>
+                  `text-sm ${isActive ? 'text-accent font-medium' : 'text-text-muted hover:text-text'}`
+                }
+              >
+                Domains
+              </NavLink>
             </div>
           </div>
           <button
