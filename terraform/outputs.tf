@@ -33,6 +33,11 @@ output "user_pool_client_id" {
   value       = module.auth.user_pool_client_id
 }
 
+output "mcp_client_id" {
+  description = "Cognito app client ID for the MCP server"
+  value       = module.auth.mcp_client_id
+}
+
 output "accent_color" {
   description = "Accent color for the admin frontend"
   value       = var.accent_color

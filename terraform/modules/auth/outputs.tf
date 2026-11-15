@@ -9,3 +9,7 @@ output "user_pool_arn" {
 output "user_pool_client_id" {
   value = aws_cognito_user_pool_client.web.id
 }
+
+output "mcp_client_id" {
+  value = aws_cognito_user_pool_client.mcp.id
+}
