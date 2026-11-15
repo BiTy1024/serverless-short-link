@@ -363,9 +363,9 @@ func pending(d settings.Domain) bool {
 		(d.Status == settings.StatusPendingValidation || d.Status == settings.StatusPendingDNS)
 }
 
-// advanceAndSave runs advance and stores the result when it changed. A
-// failing AWS call is recorded in the error field and stored with the
-// progress made before it; it does not fail the call.
+// advanceAndSave runs advance and stores the result when it changed and the
+// domain still exists. A failing AWS call is recorded in the error field and
+// stored with the progress made before it; it does not fail the call.
 func (m *Manager) advanceAndSave(ctx context.Context, d settings.Domain) (settings.Domain, error) {
 	if !pending(d) {
 		return d, nil
@@ -380,6 +380,14 @@ func (m *Manager) advanceAndSave(ctx context.Context, d settings.Domain) (settin
 		next.Error = ""
 	}
 	if equal(before, next) {
+		return next, nil
+	}
+	// A delete may have run while this check talked to AWS; writing now
+	// would bring the deleted domain back.
+	if _, ok, err := m.Settings.Get(ctx, d.Domain); err != nil {
+		return settings.Domain{}, err
+	} else if !ok {
+		slog.Info("Domain deleted during check, result dropped", "domain", d.Domain)
 		return next, nil
 	}
 	next.UpdatedAt = store.Timestamp(m.Now())

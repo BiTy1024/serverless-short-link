@@ -133,6 +133,8 @@ func validation(domain string) []settings.Record {
 type fakeGateway struct {
 	calls
 	domains map[string]string // domain -> cert ARN
+	// onEnsure, when set, runs at the start of EnsureDomain.
+	onEnsure func()
 }
 
 func target(domain string) string { return "d-" + domain + ".execute-api.eu-central-1.amazonaws.com" }
@@ -142,6 +144,9 @@ func endpoint(domain string) Endpoint {
 }
 
 func (f *fakeGateway) EnsureDomain(_ context.Context, domain, cert string) (Endpoint, error) {
+	if f.onEnsure != nil {
+		f.onEnsure()
+	}
 	if err := f.enter("EnsureDomain"); err != nil {
 		return Endpoint{}, err
 	}

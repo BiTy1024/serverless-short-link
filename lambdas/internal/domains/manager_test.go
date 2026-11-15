@@ -418,3 +418,23 @@ func TestRoute53RecordConflictIsStored(t *testing.T) {
 		t.Errorf("stored = %+v", stored)
 	}
 }
+
+func TestCheckDoesNotRecreateDomainDeletedMeanwhile(t *testing.T) {
+	e := newEnv(t)
+	createExternal(t, e)
+	e.certs.issue(video, CertIssued)
+	// The domain is deleted while the scheduled check creates its custom domain.
+	e.gateway.onEnsure = func() {
+		e.gateway.onEnsure = nil
+		if err := e.m.Delete(ctx, video); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := e.m.CheckAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if names := e.ssm.Names(); len(names) != 1 {
+		t.Errorf("parameters = %v, want only the primary's", names)
+	}
+}
