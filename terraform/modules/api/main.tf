@@ -1,43 +1,10 @@
-# --- Regional ACM cert for the API custom domain ---
-
-resource "aws_acm_certificate" "api" {
-  domain_name       = var.domain_name
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_route53_record" "api_cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.api.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      record = dvo.resource_record_value
-    }
-  }
-
-  zone_id         = var.hosted_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 60
-  allow_overwrite = true
-}
-
-resource "aws_acm_certificate_validation" "api" {
-  certificate_arn         = aws_acm_certificate.api.arn
-  validation_record_fqdns = [for r in aws_route53_record.api_cert_validation : r.fqdn]
-}
-
 resource "aws_apigatewayv2_api" "this" {
   name          = "${var.stack_name}-api"
   protocol_type = "HTTP"
 
   cors_configuration {
     allow_origins = [var.admin_origin]
-    allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     allow_headers = ["Content-Type", "Authorization"]
     max_age       = 3600
   }
@@ -81,6 +48,14 @@ resource "aws_apigatewayv2_integration" "stats" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_integration" "domains" {
+  api_id                 = aws_apigatewayv2_api.this.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = var.domains_lambda_invoke_arn
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+}
+
 # --- Lambda invoke permissions ---
 
 resource "aws_lambda_permission" "redirect" {
@@ -107,6 +82,14 @@ resource "aws_lambda_permission" "stats" {
   source_arn    = "${aws_apigatewayv2_api.this.execution_arn}/*/*"
 }
 
+resource "aws_lambda_permission" "domains" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = var.domains_lambda_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.this.execution_arn}/*/*"
+}
+
 # --- Routes ---
 
 locals {
@@ -120,7 +103,14 @@ locals {
     overview = "GET /api/stats"
     detail   = "GET /api/stats/{domain}/{path}"
   }
-  throttled_routes = merge(local.links_routes, local.stats_routes)
+  domains_routes = {
+    list   = "GET /api/domains"
+    create = "POST /api/domains"
+    check  = "POST /api/domains/{domain}/check"
+    update = "PATCH /api/domains/{domain}"
+    delete = "DELETE /api/domains/{domain}"
+  }
+  throttled_routes = merge(local.links_routes, local.stats_routes, local.domains_routes)
 }
 
 resource "aws_apigatewayv2_route" "redirect_root" {
@@ -157,6 +147,16 @@ resource "aws_apigatewayv2_route" "stats" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+resource "aws_apigatewayv2_route" "domains" {
+  for_each = local.domains_routes
+
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.domains.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
 # --- Stage ---
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -181,16 +181,18 @@ resource "aws_apigatewayv2_stage" "default" {
     aws_apigatewayv2_route.redirect_proxy,
     aws_apigatewayv2_route.links,
     aws_apigatewayv2_route.stats,
+    aws_apigatewayv2_route.domains,
   ]
 }
 
-# --- Custom domain ---
+# --- Custom domain of the primary domain ---
+# Secondary domains get their custom domains from the domains Lambda.
 
 resource "aws_apigatewayv2_domain_name" "this" {
   domain_name = var.domain_name
 
   domain_name_configuration {
-    certificate_arn = aws_acm_certificate_validation.api.certificate_arn
+    certificate_arn = var.certificate_arn
     endpoint_type   = "REGIONAL"
     security_policy = "TLS_1_2"
   }
@@ -203,6 +205,8 @@ resource "aws_apigatewayv2_api_mapping" "this" {
 }
 
 resource "aws_route53_record" "this" {
+  count = var.dns_mode == "route53" ? 1 : 0
+
   zone_id = var.hosted_zone_id
   name    = var.domain_name
   type    = "A"

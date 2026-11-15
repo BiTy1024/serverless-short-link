@@ -8,7 +8,6 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
-	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store/storetest"
 )
@@ -24,7 +23,7 @@ var fixedNow = time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
 func newHandler(s Store) *Handler {
 	return &Handler{
 		Store:              s,
-		Domains:            domain.Static{FallbackURL: defaultURL},
+		Domains:            static{fallbackURL: defaultURL},
 		DefaultRedirectURL: defaultURL,
 		AdminOrigin:        adminOrigin,
 		Now:                func() time.Time { return fixedNow },
@@ -120,7 +119,7 @@ func TestRedirectLookupFailureIs502(t *testing.T) {
 func TestAPIPaths(t *testing.T) {
 	cors := map[string]string{
 		"Access-Control-Allow-Origin":  adminOrigin,
-		"Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+		"Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
 		"Access-Control-Max-Age":       "3600",
 	}
@@ -198,7 +197,7 @@ func TestRedirectResolvesDomainFromHost(t *testing.T) {
 // noDomains reports every domain as unknown and counts its calls.
 type noDomains struct{ calls *int }
 
-func (n noDomains) Fallback(string) (string, bool) {
+func (n noDomains) Fallback(context.Context, string) (string, bool) {
 	*n.calls++
 	return "", false
 }
@@ -248,7 +247,7 @@ func TestRedirectSameSlugOnTwoDomains(t *testing.T) {
 // onlyDomain serves one domain and reports every other as unknown.
 type onlyDomain struct{ name, url string }
 
-func (o onlyDomain) Fallback(d string) (string, bool) {
+func (o onlyDomain) Fallback(_ context.Context, d string) (string, bool) {
 	if d == o.name {
 		return o.url, true
 	}
@@ -280,3 +279,8 @@ func TestRedirectUnknownDomainIs404WithoutLookup(t *testing.T) {
 		t.Errorf("lookups=%d clicks=%d", fake.Calls["GetLink"], len(fake.Clicks))
 	}
 }
+
+// static serves every domain with the same fallback URL.
+type static struct{ fallbackURL string }
+
+func (s static) Fallback(context.Context, string) (string, bool) { return s.fallbackURL, true }

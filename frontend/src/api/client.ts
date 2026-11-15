@@ -59,6 +59,43 @@ export interface StatsDetail {
   recent_clicks: Array<{ timestamp: string }>
 }
 
+export type DomainStatus = 'pending_validation' | 'pending_dns' | 'active' | 'failed'
+export type DNSMode = 'external' | 'route53'
+
+export interface DNSRecord {
+  name: string
+  type: string
+  value: string
+}
+
+export interface DomainSetting {
+  domain: string
+  role: 'primary' | 'secondary'
+  dns_mode: DNSMode
+  hosted_zone_id?: string
+  fallback_url: string
+  status: DomainStatus
+  cert_arn?: string
+  target_domain?: string
+  validation_records: DNSRecord[]
+  dns_records: DNSRecord[]
+  error?: string
+  updated_at?: string
+}
+
+export interface DomainList {
+  domains: DomainSetting[]
+  count: number
+  route53_zone_ids: string[]
+}
+
+export interface NewDomain {
+  domain: string
+  dns_mode: DNSMode
+  hosted_zone_id?: string
+  fallback_url: string
+}
+
 export interface TimeFilter {
   days?: number
   from?: string
@@ -108,4 +145,21 @@ export const api = {
 
   getLinkStats: (domain: string, slug: string, params?: TimeFilter): Promise<StatsDetail> =>
     request(`/api/stats${linkPath(domain, slug)}${queryString({ ...params })}`),
+
+  getDomains: (): Promise<DomainList> => request('/api/domains'),
+
+  createDomain: (domain: NewDomain): Promise<DomainSetting> =>
+    request('/api/domains', { method: 'POST', body: JSON.stringify(domain) }),
+
+  checkDomain: (domain: string): Promise<DomainSetting> =>
+    request(`/api/domains/${encodeURIComponent(domain)}/check`, { method: 'POST' }),
+
+  updateDomainFallback: (domain: string, fallback_url: string): Promise<DomainSetting> =>
+    request(`/api/domains/${encodeURIComponent(domain)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ fallback_url }),
+    }),
+
+  deleteDomain: (domain: string): Promise<null> =>
+    request(`/api/domains/${encodeURIComponent(domain)}`, { method: 'DELETE' }),
 }

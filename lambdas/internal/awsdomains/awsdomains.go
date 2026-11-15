@@ -1,0 +1,451 @@
+// Package awsdomains implements the AWS side of the domains package: ACM
+// certificates, API Gateway custom domains and Route 53 records. The
+// adapters are thin; the decisions live in package domains.
+package awsdomains
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/acm"
+	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
+	"github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
+	gwtypes "github.com/aws/aws-sdk-go-v2/service/apigatewayv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/route53"
+	r53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
+
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domains"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/settings"
+)
+
+// StackTag is the tag key that marks a certificate or custom domain as
+// created by a stack; its value is the stack name. Only certificates and
+// custom domains tagged with this stack's name are deleted; for
+// certificates the IAM policy enforces the same.
+const StackTag = "short-link-stack"
+
+// Certs implements domains.Certs with ACM in the Lambda's region.
+type Certs struct {
+	Client *acm.Client
+	Stack  string
+}
+
+// Request asks for a DNS-validated certificate. The idempotency token is
+// derived from the domain, so a retried request within an hour returns the
+// same certificate instead of a second one.
+func (c *Certs) Request(ctx context.Context, domain string) (string, error) {
+	sum := sha256.Sum256([]byte(c.Stack + "/" + domain))
+	out, err := c.Client.RequestCertificate(ctx, &acm.RequestCertificateInput{
+		DomainName:       aws.String(domain),
+		ValidationMethod: acmtypes.ValidationMethodDns,
+		IdempotencyToken: aws.String(hex.EncodeToString(sum[:16])),
+		Tags:             []acmtypes.Tag{{Key: aws.String(StackTag), Value: aws.String(c.Stack)}},
+	})
+	if err != nil {
+		return "", err
+	}
+	return aws.ToString(out.CertificateArn), nil
+}
+
+// Describe returns the certificate's status and validation records.
+func (c *Certs) Describe(ctx context.Context, arn string) (domains.Cert, error) {
+	out, err := c.Client.DescribeCertificate(ctx, &acm.DescribeCertificateInput{CertificateArn: aws.String(arn)})
+	if err != nil {
+		return domains.Cert{}, err
+	}
+	cert := domains.Cert{
+		Status:        string(out.Certificate.Status),
+		FailureReason: string(out.Certificate.FailureReason),
+	}
+	for _, o := range out.Certificate.DomainValidationOptions {
+		if r := o.ResourceRecord; r != nil {
+			cert.Records = append(cert.Records, settings.Record{
+				Name:  aws.ToString(r.Name),
+				Type:  string(r.Type),
+				Value: aws.ToString(r.Value),
+			})
+		}
+	}
+	return cert, nil
+}
+
+// Delete removes the certificate when it carries StackTag with this stack's
+// name.
+func (c *Certs) Delete(ctx context.Context, arn string) (bool, error) {
+	var notFound *acmtypes.ResourceNotFoundException
+	tags, err := c.Client.ListTagsForCertificate(ctx, &acm.ListTagsForCertificateInput{CertificateArn: aws.String(arn)})
+	if errors.As(err, &notFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	tagged := false
+	for _, t := range tags.Tags {
+		if aws.ToString(t.Key) == StackTag && aws.ToString(t.Value) == c.Stack {
+			tagged = true
+		}
+	}
+	if !tagged {
+		return false, nil
+	}
+	_, err = c.Client.DeleteCertificate(ctx, &acm.DeleteCertificateInput{CertificateArn: aws.String(arn)})
+	var inUse *acmtypes.ResourceInUseException
+	switch {
+	case errors.As(err, &inUse):
+		return false, domains.ErrCertInUse
+	case errors.As(err, &notFound):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
+}
+
+// GatewayAPI is the part of the API Gateway v2 client Gateway uses.
+type GatewayAPI interface {
+	GetDomainName(ctx context.Context, in *apigatewayv2.GetDomainNameInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.GetDomainNameOutput, error)
+	CreateDomainName(ctx context.Context, in *apigatewayv2.CreateDomainNameInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.CreateDomainNameOutput, error)
+	DeleteDomainName(ctx context.Context, in *apigatewayv2.DeleteDomainNameInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.DeleteDomainNameOutput, error)
+	GetApiMappings(ctx context.Context, in *apigatewayv2.GetApiMappingsInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.GetApiMappingsOutput, error)
+	CreateApiMapping(ctx context.Context, in *apigatewayv2.CreateApiMappingInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.CreateApiMappingOutput, error)
+	DeleteApiMapping(ctx context.Context, in *apigatewayv2.DeleteApiMappingInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.DeleteApiMappingOutput, error)
+}
+
+// ErrForeignDomain is returned when a custom domain of the requested name
+// exists but belongs to someone else: it lacks the stack tag and is mapped
+// to another API.
+var ErrForeignDomain = errors.New("custom domain exists and is mapped to another API")
+
+// Gateway implements domains.Gateway with API Gateway v2 custom domains
+// mapped to one stage of one HTTP API. It creates custom domains with
+// StackTag and never changes or removes another API's mappings or a custom
+// domain without the tag.
+type Gateway struct {
+	Client GatewayAPI
+	APIID  string
+	Stage  string
+	Stack  string
+}
+
+type gatewayDomain struct {
+	endpoint domains.Endpoint
+	owned    bool
+}
+
+func (g *Gateway) get(ctx context.Context, domain string) (gatewayDomain, bool, error) {
+	out, err := g.Client.GetDomainName(ctx, &apigatewayv2.GetDomainNameInput{DomainName: aws.String(domain)})
+	var notFound *gwtypes.NotFoundException
+	if errors.As(err, &notFound) {
+		return gatewayDomain{}, false, nil
+	}
+	if err != nil {
+		return gatewayDomain{}, false, err
+	}
+	if len(out.DomainNameConfigurations) == 0 {
+		return gatewayDomain{}, false, errors.New("custom domain " + domain + " has no configuration")
+	}
+	cfg := out.DomainNameConfigurations[0]
+	return gatewayDomain{
+		endpoint: domains.Endpoint{
+			Target:       aws.ToString(cfg.ApiGatewayDomainName),
+			HostedZoneID: aws.ToString(cfg.HostedZoneId),
+		},
+		owned: out.Tags[StackTag] == g.Stack,
+	}, true, nil
+}
+
+// FindDomain returns the regional endpoint of the custom domain.
+func (g *Gateway) FindDomain(ctx context.Context, domain string) (domains.Endpoint, bool, error) {
+	d, found, err := g.get(ctx, domain)
+	return d.endpoint, found, err
+}
+
+// mappings returns every API mapping of the custom domain.
+func (g *Gateway) mappings(ctx context.Context, domain string) ([]gwtypes.ApiMapping, error) {
+	var all []gwtypes.ApiMapping
+	var next *string
+	for {
+		out, err := g.Client.GetApiMappings(ctx, &apigatewayv2.GetApiMappingsInput{DomainName: aws.String(domain), NextToken: next})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, out.Items...)
+		if out.NextToken == nil {
+			return all, nil
+		}
+		next = out.NextToken
+	}
+}
+
+// foreign reports whether one of the mappings points at another API.
+func (g *Gateway) foreign(ms []gwtypes.ApiMapping) bool {
+	for _, m := range ms {
+		if aws.ToString(m.ApiId) != g.APIID {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) mapped(ms []gwtypes.ApiMapping) bool {
+	return slices.ContainsFunc(ms, func(m gwtypes.ApiMapping) bool { return aws.ToString(m.ApiId) == g.APIID })
+}
+
+// EnsureDomain creates the regional custom domain (TLS 1.2, tagged with
+// StackTag) and its mapping to the API's stage unless they exist. An
+// existing custom domain is used only when it carries the stack tag or is
+// mapped to no API but this one; otherwise it fails with ErrForeignDomain.
+func (g *Gateway) EnsureDomain(ctx context.Context, domain, certARN string) (domains.Endpoint, error) {
+	d, found, err := g.get(ctx, domain)
+	if err != nil {
+		return domains.Endpoint{}, err
+	}
+	if !found {
+		_, err := g.Client.CreateDomainName(ctx, &apigatewayv2.CreateDomainNameInput{
+			DomainName: aws.String(domain),
+			DomainNameConfigurations: []gwtypes.DomainNameConfiguration{{
+				CertificateArn: aws.String(certARN),
+				EndpointType:   gwtypes.EndpointTypeRegional,
+				SecurityPolicy: gwtypes.SecurityPolicyTls12,
+			}},
+			Tags: map[string]string{StackTag: g.Stack},
+		})
+		// A conflict means it was created concurrently, possibly by someone
+		// else; the ownership check below decides.
+		var conflict *gwtypes.ConflictException
+		if err != nil && !errors.As(err, &conflict) {
+			return domains.Endpoint{}, err
+		}
+		if d, found, err = g.get(ctx, domain); err != nil {
+			return domains.Endpoint{}, err
+		} else if !found {
+			return domains.Endpoint{}, errors.New("custom domain " + domain + " not found after creating it")
+		}
+	}
+	if !d.owned {
+		ms, err := g.mappings(ctx, domain)
+		if err != nil {
+			return domains.Endpoint{}, err
+		}
+		if g.foreign(ms) {
+			return domains.Endpoint{}, fmt.Errorf("%s: %w", domain, ErrForeignDomain)
+		}
+	}
+	return d.endpoint, g.ensureMapping(ctx, domain)
+}
+
+// ensureMapping maps the custom domain to the API's stage unless it is.
+// Another API's mapping fails it with ErrForeignDomain.
+func (g *Gateway) ensureMapping(ctx context.Context, domain string) error {
+	ms, err := g.mappings(ctx, domain)
+	if err != nil {
+		return err
+	}
+	if g.mapped(ms) {
+		return nil
+	}
+	if g.foreign(ms) {
+		return fmt.Errorf("%s: %w", domain, ErrForeignDomain)
+	}
+	_, err = g.Client.CreateApiMapping(ctx, &apigatewayv2.CreateApiMappingInput{
+		ApiId:      aws.String(g.APIID),
+		DomainName: aws.String(domain),
+		Stage:      aws.String(g.Stage),
+	})
+	var conflict *gwtypes.ConflictException
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	// A mapping was created concurrently; it counts only when it is ours.
+	if ms, err = g.mappings(ctx, domain); err != nil {
+		return err
+	}
+	if g.mapped(ms) {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", domain, ErrForeignDomain)
+}
+
+// DeleteDomain removes the API's mappings of the custom domain, then the
+// custom domain itself when it carries the stack tag and has no mappings
+// left. Another API's mappings and untagged custom domains stay.
+func (g *Gateway) DeleteDomain(ctx context.Context, domain string) error {
+	var notFound *gwtypes.NotFoundException
+	d, found, err := g.get(ctx, domain)
+	if err != nil || !found {
+		return err
+	}
+	ms, err := g.mappings(ctx, domain)
+	if errors.As(err, &notFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if aws.ToString(m.ApiId) != g.APIID {
+			continue
+		}
+		_, err := g.Client.DeleteApiMapping(ctx, &apigatewayv2.DeleteApiMappingInput{
+			ApiMappingId: m.ApiMappingId,
+			DomainName:   aws.String(domain),
+		})
+		if err != nil && !errors.As(err, &notFound) {
+			return err
+		}
+	}
+	if !d.owned || g.foreign(ms) {
+		slog.Warn("Custom domain left in place", "domain", domain, "tagged", d.owned, "other_mappings", g.foreign(ms))
+		return nil
+	}
+	_, err = g.Client.DeleteDomainName(ctx, &apigatewayv2.DeleteDomainNameInput{DomainName: aws.String(domain)})
+	if errors.As(err, &notFound) {
+		return nil
+	}
+	return err
+}
+
+// ZonesAPI is the part of the Route 53 client Zones uses.
+type ZonesAPI interface {
+	ChangeResourceRecordSets(ctx context.Context, in *route53.ChangeResourceRecordSetsInput, opts ...func(*route53.Options)) (*route53.ChangeResourceRecordSetsOutput, error)
+	ListResourceRecordSets(ctx context.Context, in *route53.ListResourceRecordSetsInput, opts ...func(*route53.Options)) (*route53.ListResourceRecordSetsOutput, error)
+}
+
+// ErrRecordConflict is returned when a record of the same name and type
+// exists with another value; it is never overwritten.
+var ErrRecordConflict = errors.New("a record with this name and type already exists with another value")
+
+// Zones implements domains.Zones with Route 53. It writes a record only when
+// none of that name and type exists or the existing one already has the
+// value it would write, and deletes only records holding its own values.
+type Zones struct {
+	Client ZonesAPI
+}
+
+// validationTTL is the TTL of the certificate validation CNAMEs.
+const validationTTL = 300
+
+func (z *Zones) change(ctx context.Context, zoneID string, action r53types.ChangeAction, set *r53types.ResourceRecordSet) error {
+	_, err := z.Client.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
+		HostedZoneId: aws.String(zoneID),
+		ChangeBatch: &r53types.ChangeBatch{
+			Changes: []r53types.Change{{Action: action, ResourceRecordSet: set}},
+		},
+	})
+	return err
+}
+
+// UpsertCNAME writes a CNAME record unless it exists with this value; a
+// record of that name and type with another value fails with
+// ErrRecordConflict.
+func (z *Zones) UpsertCNAME(ctx context.Context, zoneID string, r settings.Record) error {
+	set, err := z.find(ctx, zoneID, r.Name, r53types.RRType(r.Type))
+	if err != nil {
+		return err
+	}
+	if set != nil {
+		if holdsValue(set, r.Value) {
+			return nil
+		}
+		return fmt.Errorf("%s %s: %w", r.Type, r.Name, ErrRecordConflict)
+	}
+	return z.change(ctx, zoneID, r53types.ChangeActionUpsert, &r53types.ResourceRecordSet{
+		Name:            aws.String(r.Name),
+		Type:            r53types.RRType(r.Type),
+		TTL:             aws.Int64(validationTTL),
+		ResourceRecords: []r53types.ResourceRecord{{Value: aws.String(r.Value)}},
+	})
+}
+
+// UpsertAlias writes an A alias record for name pointing at the custom
+// domain's regional endpoint, unless it exists with this target; an A
+// record with another value fails with ErrRecordConflict.
+func (z *Zones) UpsertAlias(ctx context.Context, zoneID, name string, target domains.Endpoint) error {
+	set, err := z.find(ctx, zoneID, name, r53types.RRTypeA)
+	if err != nil {
+		return err
+	}
+	if set != nil {
+		if aliasTo(set, target) {
+			return nil
+		}
+		return fmt.Errorf("A %s: %w", name, ErrRecordConflict)
+	}
+	return z.change(ctx, zoneID, r53types.ChangeActionUpsert, &r53types.ResourceRecordSet{
+		Name: aws.String(name),
+		Type: r53types.RRTypeA,
+		AliasTarget: &r53types.AliasTarget{
+			DNSName:              aws.String(target.Target),
+			HostedZoneId:         aws.String(target.HostedZoneID),
+			EvaluateTargetHealth: false,
+		},
+	})
+}
+
+func holdsValue(set *r53types.ResourceRecordSet, value string) bool {
+	return set.AliasTarget == nil && len(set.ResourceRecords) == 1 &&
+		canonical(aws.ToString(set.ResourceRecords[0].Value)) == canonical(value)
+}
+
+func aliasTo(set *r53types.ResourceRecordSet, target domains.Endpoint) bool {
+	return set.AliasTarget != nil && canonical(aws.ToString(set.AliasTarget.DNSName)) == canonical(target.Target)
+}
+
+// DeleteCNAME removes the CNAME record r when it still holds r.Value.
+func (z *Zones) DeleteCNAME(ctx context.Context, zoneID string, r settings.Record) error {
+	set, err := z.find(ctx, zoneID, r.Name, r53types.RRType(r.Type))
+	if err != nil || set == nil {
+		return err
+	}
+	if !holdsValue(set, r.Value) {
+		return nil
+	}
+	return z.change(ctx, zoneID, r53types.ChangeActionDelete, set)
+}
+
+// DeleteAlias removes the A alias record of name when it still points at
+// target.
+func (z *Zones) DeleteAlias(ctx context.Context, zoneID, name string, target domains.Endpoint) error {
+	set, err := z.find(ctx, zoneID, name, r53types.RRTypeA)
+	if err != nil || set == nil {
+		return err
+	}
+	if !aliasTo(set, target) {
+		return nil
+	}
+	return z.change(ctx, zoneID, r53types.ChangeActionDelete, set)
+}
+
+// find returns the record set of name and type, or nil when there is none.
+// Route 53 deletes only exact matches, so the stored set is what Delete sends.
+func (z *Zones) find(ctx context.Context, zoneID, name string, typ r53types.RRType) (*r53types.ResourceRecordSet, error) {
+	out, err := z.Client.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
+		HostedZoneId:    aws.String(zoneID),
+		StartRecordName: aws.String(name),
+		StartRecordType: typ,
+		MaxItems:        aws.Int32(1),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(out.ResourceRecordSets) == 0 {
+		return nil, nil
+	}
+	set := out.ResourceRecordSets[0]
+	if canonical(aws.ToString(set.Name)) != canonical(name) || set.Type != typ {
+		return nil, nil
+	}
+	return &set, nil
+}
+
+func canonical(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}

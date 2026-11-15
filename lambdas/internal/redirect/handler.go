@@ -26,7 +26,7 @@ type Store interface {
 type DomainConfig interface {
 	// Fallback returns the target for "/" and for unknown slugs on domain;
 	// known is false when the domain is not served by this stack.
-	Fallback(domain string) (url string, known bool)
+	Fallback(ctx context.Context, domain string) (url string, known bool)
 }
 
 // Handler serves every non-API route of the HTTP API.
@@ -66,7 +66,7 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 		slog.Info("Request without host, using default", "target_url", h.DefaultRedirectURL)
 		return movedPermanently(h.DefaultRedirectURL), nil
 	}
-	fallback, served := h.Domains.Fallback(host)
+	fallback, served := h.Domains.Fallback(ctx, host)
 	if !served {
 		slog.Info("Domain not served", "domain", host)
 		return notFound(), nil
@@ -96,7 +96,7 @@ func movedPermanently(target string) events.APIGatewayV2HTTPResponse {
 func (h *Handler) apiFallback(req events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
 	cors := map[string]string{
 		"Access-Control-Allow-Origin":  h.AdminOrigin,
-		"Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+		"Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
 		"Access-Control-Max-Age":       "3600",
 	}

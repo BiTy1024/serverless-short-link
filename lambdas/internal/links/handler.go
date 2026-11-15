@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -33,7 +32,15 @@ type Store interface {
 // Handler serves the /api/links routes.
 type Handler struct {
 	Store Store
-	Now   func() time.Time
+	// Domains tells which domains are configured; links can only be
+	// created on those.
+	Domains Domains
+	Now     func() time.Time
+}
+
+// Domains reports whether a domain is configured in the domain settings.
+type Domains interface {
+	Exists(ctx context.Context, domain string) (bool, error)
 }
 
 const (
@@ -67,7 +74,7 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if !ok {
 		return apigw.Error(404, "Route not found"), nil
 	}
-	if slices.Contains(writeRoutes, req.RouteKey) && !slices.Contains(userGroups(req), adminGroup) {
+	if slices.Contains(writeRoutes, req.RouteKey) && !slices.Contains(apigw.UserGroups(req), adminGroup) {
 		return apigw.Error(403, "Admin access required"), nil
 	}
 	return h.run(ctx, req, route), nil
@@ -86,29 +93,6 @@ func (h *Handler) run(ctx context.Context, req events.APIGatewayV2HTTPRequest, r
 		return apigw.Error(500, "Internal server error")
 	}
 	return resp
-}
-
-// userGroups reads the cognito:groups claim. The HTTP API JWT authorizer
-// passes array claims as a string: "[admin viewer]" (space separated), a
-// single group as "admin" or "[admin]". A JSON array string such as
-// ["admin","viewer"] is accepted as well. Commas also separate groups.
-func userGroups(req events.APIGatewayV2HTTPRequest) []string {
-	auth := req.RequestContext.Authorizer
-	if auth == nil || auth.JWT == nil {
-		return nil
-	}
-	claim := strings.TrimSpace(auth.JWT.Claims["cognito:groups"])
-	if claim == "" {
-		return nil
-	}
-	var list []string
-	if err := json.Unmarshal([]byte(claim), &list); err == nil {
-		return list
-	}
-	claim = strings.TrimSuffix(strings.TrimPrefix(claim, "["), "]")
-	return strings.FieldsFunc(claim, func(r rune) bool {
-		return r == ',' || unicode.IsSpace(r)
-	})
 }
 
 func validateURL(url string) string {
@@ -209,6 +193,13 @@ func (h *Handler) create(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	}
 	if msg := validateURL(targetURL); msg != "" {
 		return apigw.Error(400, msg), nil
+	}
+	known, err := h.Domains.Exists(ctx, name)
+	if err != nil {
+		return events.APIGatewayV2HTTPResponse{}, err
+	}
+	if !known {
+		return apigw.Error(400, fmt.Sprintf("Unknown domain '%s'; add it in the domain settings first", name)), nil
 	}
 
 	now := store.Timestamp(h.Now())

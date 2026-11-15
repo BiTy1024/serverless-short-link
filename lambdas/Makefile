@@ -1,7 +1,7 @@
 # Builds one linux/arm64 "bootstrap" binary per Lambda for the
 # provided.al2023 runtime. Terraform zips build/<name>/bootstrap.
 
-FUNCTIONS := redirect links stats
+FUNCTIONS := redirect links stats domains
 
 .PHONY: build test vet fmt-check clean
 

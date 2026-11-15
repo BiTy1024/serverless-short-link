@@ -7,7 +7,11 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.18
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.21
+	github.com/aws/aws-sdk-go-v2/service/acm v1.51.5
+	github.com/aws/aws-sdk-go-v2/service/apigatewayv2 v1.46.9
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.74.0
+	github.com/aws/aws-sdk-go-v2/service/route53 v1.71.0
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.83.0
 )
 
 require (

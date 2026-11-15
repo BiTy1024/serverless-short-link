@@ -1,14 +1,13 @@
 # Terraform Deployment
 
-Provisions the whole stack: Lambda, HTTP API, DynamoDB, Cognito, S3, CloudFront, Route53.
+Provisions the whole stack: Lambdas, HTTP API, DynamoDB, Cognito, S3, CloudFront, the certificates of the primary domain, its SSM domain setting and, in route53 mode, its Route 53 records.
 
 ## Prerequisites
 
 - Go and make, to build the Lambda binaries (`make -C lambdas build` from the repo root) before `plan`/`apply`
 - Terraform >= 1.6
 - AWS CLI configured for the target account
-- Route53 hosted zone for the parent domain
-- ACM certificate for `var.domain_name` **in the same region** (us-east-1 cert for CloudFront is created automatically)
+- In route53 mode: the Route 53 hosted zone of the primary domain. In external mode: access to the DNS host to set CNAME records by hand
 
 ## One-time: bootstrap remote state
 
@@ -35,6 +34,8 @@ terraform init -backend-config=backend.hcl
 terraform apply -var-file=envs/myenv.tfvars
 ```
 
+With `primary_dns_mode = "external"`, run `terraform apply -var-file=envs/myenv.tfvars -target=module.certs` first and set the records from `terraform output certificate_validation_records`; the full apply waits for the certificates to validate. The step-by-step flow is in the repository README.
+
 The repo-root `deploy.sh` wraps this and also handles the frontend build + S3 sync + CloudFront invalidation:
 
 ```bash
@@ -43,7 +44,9 @@ The repo-root `deploy.sh` wraps this and also handles the frontend build + S3 sy
 
 ## Certificates
 
-The us-east-1 cert for CloudFront uses a `provider "aws" { alias = "us_east_1" }`; the regional API cert is created in the deploy region. Both are DNS-validated in the Route53 hosted zone.
+`modules/certs` requests both certificates of the primary domain: the regional one for the API custom domain and the us-east-1 one for CloudFront (through `provider "aws" { alias = "us_east_1" }`). In route53 mode it also writes their validation records. The `aws_acm_certificate_validation` resources that wait for validation live in the root module, so `-target=module.certs` returns without waiting.
+
+Certificates of secondary domains are requested by the domains Lambda at runtime, tagged `short-link-stack = <stack_name>`; its IAM policy allows deleting only certificates with that tag.
 
 ## Layout
 
@@ -54,8 +57,9 @@ terraform/
 │   ├── data/         # DynamoDB tables
 │   ├── auth/         # Cognito pool + groups + client
 │   ├── lambda/       # Lambda wrapper: zips a prebuilt bootstrap binary (terraform-aws-modules/lambda/aws)
-│   ├── api/          # HTTP API + JWT authorizer + custom domain
-│   └── frontend/     # S3 + CloudFront + us-east-1 cert + Route53
+│   ├── certs/        # certificates of the primary domain (+ Route 53 validation records)
+│   ├── api/          # HTTP API + JWT authorizer + primary custom domain
+│   └── frontend/     # S3 + CloudFront (+ Route 53 alias)
 ├── envs/             # per-environment .tfvars files
 ├── main.tf           # module composition
 ├── variables.tf

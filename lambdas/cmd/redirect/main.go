@@ -11,10 +11,11 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/env"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/redirect"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/settings"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 )
 
@@ -32,7 +33,13 @@ func main() {
 			LinksTable: env.Require("LINKS_TABLE_NAME"),
 			StatsTable: env.Require("STATS_TABLE_NAME"),
 		},
-		Domains:            domain.Static{FallbackURL: defaultURL},
+		Domains: &settings.Fallbacks{
+			Store:      &settings.Store{Client: ssm.NewFromConfig(cfg), Path: env.Require("DOMAINS_PARAMETER_PATH")},
+			DefaultURL: defaultURL,
+			TTL:        settings.DefaultTTL,
+			Retry:      settings.DefaultRetry,
+			Now:        time.Now,
+		},
 		DefaultRedirectURL: defaultURL,
 		AdminOrigin:        env.Require("ADMIN_ORIGIN"),
 		Now:                time.Now,

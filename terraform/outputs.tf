@@ -4,8 +4,8 @@ output "api_endpoint" {
 }
 
 output "custom_domain_url" {
-  description = "Custom domain URL for the redirect service"
-  value       = "https://${var.domain_name}"
+  description = "URL of the primary domain, which serves the management API"
+  value       = "https://${var.primary_domain}"
 }
 
 output "admin_domain_url" {
@@ -51,4 +51,19 @@ output "links_table_name" {
 output "stats_table_name" {
   description = "DynamoDB table name for redirect statistics"
   value       = module.data.stats_table_name
+}
+
+output "certificate_validation_records" {
+  description = "CNAMEs that validate the primary domain's certificates; set them at the DNS host in external mode (phase 1)"
+  value       = local.primary_validation_records
+}
+
+output "dns_records" {
+  description = "CNAMEs that point the primary and admin domains at the service; set them at the DNS host in external mode (after phase 2)"
+  value       = local.primary_dns_records
+}
+
+output "domains_parameter_path" {
+  description = "SSM Parameter Store path of the domain settings"
+  value       = local.domains_path
 }

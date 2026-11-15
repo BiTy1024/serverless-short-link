@@ -1,5 +1,5 @@
 // Package domain normalises and validates the host names short links are
-// served on, and provides the per-domain redirect settings.
+// served on.
 package domain
 
 import (
@@ -86,14 +86,4 @@ func validLabel(l string) bool {
 		}
 	}
 	return true
-}
-
-// Static serves every domain with the same fallback URL.
-type Static struct {
-	FallbackURL string
-}
-
-// Fallback returns the configured URL for any domain; known is always true.
-func (s Static) Fallback(string) (url string, known bool) {
-	return s.FallbackURL, true
 }

@@ -43,3 +43,26 @@ func TrimSpace(s string) string {
 		return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f)
 	})
 }
+
+// UserGroups reads the cognito:groups claim. The HTTP API JWT authorizer
+// passes array claims as a string: "[admin viewer]" (space separated), a
+// single group as "admin" or "[admin]". A JSON array string such as
+// ["admin","viewer"] is accepted as well. Commas also separate groups.
+func UserGroups(req events.APIGatewayV2HTTPRequest) []string {
+	auth := req.RequestContext.Authorizer
+	if auth == nil || auth.JWT == nil {
+		return nil
+	}
+	claim := strings.TrimSpace(auth.JWT.Claims["cognito:groups"])
+	if claim == "" {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(claim), &list); err == nil {
+		return list
+	}
+	claim = strings.TrimSuffix(strings.TrimPrefix(claim, "["), "]")
+	return strings.FieldsFunc(claim, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+}

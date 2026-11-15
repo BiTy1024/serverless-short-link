@@ -1,6 +1,8 @@
-stack_name           = "pr-redirect-service"
-aws_region           = "eu-central-1"
-domain_name          = "short.your-domain.de"
-hosted_zone_id       = "YOUR_HOSTED_ZONE_ID"
-default_redirect_url = "https://your-default-redirect.de"
-accent_color         = "#2A1058"
+stack_name             = "pr-redirect-service"
+aws_region             = "eu-central-1"
+primary_domain         = "short.your-domain.de"
+primary_dns_mode       = "external" # or "route53"
+primary_hosted_zone_id = ""         # Route 53 zone of primary_domain, route53 mode only
+route53_zone_ids       = []         # zones secondary domains may use in route53 mode
+default_redirect_url   = "https://your-default-redirect.de"
+accent_color           = "#2A1058"

@@ -16,7 +16,7 @@ module "function" {
   handler       = "bootstrap"
   runtime       = "provided.al2023"
   architectures = ["arm64"]
-  timeout       = 10
+  timeout       = var.timeout
   memory_size   = 256
 
   create_package         = false
@@ -31,6 +31,7 @@ module "function" {
       effect    = stmt.effect
       actions   = stmt.actions
       resources = stmt.resources
+      condition = stmt.conditions
     }
   }
 
