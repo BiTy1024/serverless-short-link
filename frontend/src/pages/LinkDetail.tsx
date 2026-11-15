@@ -44,15 +44,15 @@ export default function LinkDetail() {
   return (
     <div className="space-y-8">
       <div>
-        <Link to="/links" className="text-sm text-text-muted hover:text-text">
+        <Link to="/links" className="inline-flex items-center min-h-10 text-sm text-text-muted hover:text-text">
           &larr; Back to links
         </Link>
       </div>
 
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-text font-mono">{shortUrl(stats.domain, stats.slug)}</h1>
+        <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-text font-mono break-all">{shortUrl(stats.domain, stats.slug)}</h1>
         {stats.target_url && (
-          <p className="text-sm text-text-muted mt-1 truncate">{stats.target_url}</p>
+          <p className="text-sm text-text-muted mt-1 break-all sm:truncate" title={stats.target_url}>{stats.target_url}</p>
         )}
       </div>
 
@@ -62,14 +62,14 @@ export default function LinkDetail() {
       </div>
 
       <div>
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 className="text-sm font-medium text-text-muted">Click Trend</h2>
           <div className="flex gap-1">
             {RANGES.map((r) => (
               <button
                 key={r.label}
                 onClick={() => setRange(r.days)}
-                className={`px-3 py-1 text-xs rounded cursor-pointer ${
+                className={`min-h-10 min-w-10 px-3 text-xs rounded cursor-pointer ${
                   range === r.days
                     ? 'bg-accent text-white'
                     : 'bg-gray-100 text-text-muted hover:bg-gray-200'

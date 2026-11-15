@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from 'react'
+import { useEffect, useEffectEvent, useId, useState } from 'react'
 import { api, type DNSMode, type DNSRecord, type DomainSetting, type DomainStatus } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 
@@ -24,8 +24,12 @@ const RECORD_POLL_MS = 5_000
 const RECORD_POLL_LIMIT_MS = 120_000
 const STATUS_POLL_MS = 60_000
 
+// 16px text below sm keeps iOS from zooming in on focus.
 const inputClass =
-  'border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent'
+  'min-h-10 min-w-0 border border-border rounded px-3 py-2 text-base sm:text-sm focus:outline-none focus:border-accent'
+
+// Text buttons with a 40px tap target.
+const actionClass = 'inline-flex items-center min-h-10 px-2 text-sm'
 
 function StatusBadge({ status }: { status: DomainStatus }) {
   return (
@@ -43,81 +47,128 @@ function CopyButton({ value }: { value: string }) {
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <button onClick={copy} className="text-xs text-text-muted hover:text-text cursor-pointer">
+    <button
+      onClick={copy}
+      className="shrink-0 inline-flex items-center min-h-10 sm:min-h-0 px-2 sm:py-0.5 font-sans text-xs text-text-muted hover:text-text cursor-pointer"
+    >
       {copied ? 'Copied' : 'Copy'}
     </button>
   )
 }
 
+// CopyableValue keeps the copy button beside a value that breaks anywhere,
+// so a long record never pushes the button out of reach.
+function CopyableValue({ value }: { value: string }) {
+  return (
+    <div className="flex items-start gap-1">
+      <span className="min-w-0 flex-1 break-all py-1 sm:py-0">{value}</span>
+      <CopyButton value={value} />
+    </div>
+  )
+}
+
+// RecordTable is a table from sm on and a stack of records below it.
 function RecordTable({ title, hint, records }: { title: string; hint: string; records: DNSRecord[] }) {
   if (records.length === 0) return null
   return (
     <div className="space-y-1">
       <p className="text-xs font-medium text-text">{title}</p>
       <p className="text-xs text-text-muted">{hint}</p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs font-mono">
-          <thead>
-            <tr className="text-left text-text-muted">
-              <th className="py-1 pr-3 font-normal">Type</th>
-              <th className="py-1 pr-3 font-normal">Name</th>
-              <th className="py-1 pr-3 font-normal">Value</th>
+      <table className="hidden sm:table w-full table-fixed text-xs font-mono">
+        <thead>
+          <tr className="text-left text-text-muted">
+            <th className="w-16 py-1 pr-3 font-normal">Type</th>
+            <th className="py-1 pr-3 font-normal">Name</th>
+            <th className="py-1 font-normal">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((r) => (
+            <tr key={`${r.type} ${r.name}`} className="border-t border-border align-top">
+              <td className="py-1 pr-3">{r.type}</td>
+              <td className="py-1 pr-3"><CopyableValue value={r.name} /></td>
+              <td className="py-1"><CopyableValue value={r.value} /></td>
             </tr>
-          </thead>
-          <tbody>
-            {records.map((r) => (
-              <tr key={`${r.type} ${r.name}`} className="border-t border-border align-top">
-                <td className="py-1 pr-3">{r.type}</td>
-                <td className="py-1 pr-3 break-all">
-                  {r.name} <CopyButton value={r.name} />
-                </td>
-                <td className="py-1 pr-3 break-all">
-                  {r.value} <CopyButton value={r.value} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
+      <ul className="sm:hidden divide-y divide-border border-t border-border text-xs font-mono">
+        {records.map((r) => (
+          <li key={`${r.type} ${r.name}`} className="py-2 space-y-1">
+            <p className="text-text-muted">{r.type}</p>
+            <div>
+              <p className="font-sans text-text-muted">Name</p>
+              <CopyableValue value={r.name} />
+            </div>
+            <div>
+              <p className="font-sans text-text-muted">Value</p>
+              <CopyableValue value={r.value} />
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
 
 // DomainRecords shows the records a person still has to set. In route53 mode
-// the service writes them itself.
+// the service writes them itself. The records are collapsed by default; while
+// a secondary domain is pending, the toggle says how many are still to set.
 function DomainRecords({ d, polling }: { d: DomainSetting; polling: boolean }) {
+  const [open, setOpen] = useState(false)
+  const panelId = useId()
   if (d.dns_mode === 'route53') {
-    return <p className="text-xs text-text-muted">DNS records are written to Route 53 hosted zone {d.hosted_zone_id}.</p>
+    return <p className="text-xs text-text-muted break-words">DNS records are written to Route 53 hosted zone {d.hosted_zone_id}.</p>
   }
   const awaitingRecord = d.status === 'pending_validation' && d.validation_records.length === 0
-  const showsRecords = d.validation_records.length > 0 || d.dns_records.length > 0
+  const validationRecords = d.status === 'pending_validation' || d.role === 'primary' ? d.validation_records : []
+  const recordCount = validationRecords.length + d.dns_records.length
+  const pending = d.role === 'secondary' && (d.status === 'pending_validation' || d.status === 'pending_dns')
   return (
     <div className="space-y-3">
       {awaitingRecord && polling && (
         <p className="flex items-center gap-2 text-sm text-text">
-          <span className="inline-block size-3.5 rounded-full border-2 border-accent border-t-transparent animate-spin" aria-hidden="true" />
+          <span className="inline-block size-3.5 shrink-0 rounded-full border-2 border-accent border-t-transparent animate-spin" aria-hidden="true" />
           Requesting the certificate's DNS record…
         </p>
       )}
       {awaitingRecord && !polling && (
         <p className="text-sm text-text">The certificate's DNS record is not available yet. Use "Check now" to ask again.</p>
       )}
-      {(d.status === 'pending_validation' || d.role === 'primary') && (
-        <RecordTable
-          title="Certificate validation"
-          hint="Set these CNAME records at your DNS host and keep them, so the certificate can renew."
-          records={d.validation_records}
-        />
-      )}
-      <RecordTable
-        title={d.role === 'primary' ? 'Service records' : 'Domain record'}
-        hint="Point the domain at the service with these CNAME records. A domain apex cannot be a CNAME."
-        records={d.dns_records}
-      />
-      {showsRecords && (
-        <p className="text-xs text-text-muted">
-          At Cloudflare and similar hosts, set each CNAME to "DNS only", not proxied.
-        </p>
+      {recordCount > 0 && (
+        <>
+          <button
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            aria-controls={panelId}
+            className="-ml-2 inline-flex flex-wrap items-center gap-x-2 min-h-10 px-2 text-sm text-text-muted hover:text-text cursor-pointer"
+          >
+            <span aria-hidden="true" className={`inline-block transition-transform ${open ? 'rotate-90' : ''}`}>&#9656;</span>
+            <span>DNS records ({recordCount})</span>
+            {pending && !open && (
+              <span className="text-xs text-amber-800">
+                {recordCount === 1 ? '1 record to set' : `${recordCount} records to set`}
+              </span>
+            )}
+          </button>
+          {open && (
+            <div id={panelId} className="space-y-3">
+              <RecordTable
+                title="Certificate validation"
+                hint="Set these CNAME records at your DNS host and keep them, so the certificate can renew."
+                records={validationRecords}
+              />
+              <RecordTable
+                title={d.role === 'primary' ? 'Service records' : 'Domain record'}
+                hint="Point the domain at the service with these CNAME records. A domain apex cannot be a CNAME."
+                records={d.dns_records}
+              />
+              <p className="text-xs text-text-muted">
+                At Cloudflare and similar hosts, set each CNAME to "DNS only", not proxied.
+              </p>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -178,19 +229,19 @@ function DomainRow({ d, isAdmin, onChange }: { d: DomainSetting; isAdmin: boolea
   return (
     <div className="px-4 py-4 space-y-3">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-sm text-text">{d.domain}</span>
+        <span className="min-w-0 font-mono text-sm text-text break-all">{d.domain}</span>
         <StatusBadge status={d.status} />
         <span className="text-xs text-text-muted">
           {d.role === 'primary' ? 'Primary' : 'Secondary'} · {d.dns_mode === 'route53' ? 'Route 53' : 'External DNS'}
         </span>
         {isAdmin && secondary && (
-          <div className="ml-auto flex gap-4">
+          <div className="ml-auto -mr-2 flex gap-1">
             {d.status !== 'active' && d.status !== 'failed' && (
-              <button onClick={check} disabled={busy} className="text-sm text-accent hover:underline cursor-pointer disabled:opacity-50">
+              <button onClick={check} disabled={busy} className={`${actionClass} text-accent hover:underline cursor-pointer disabled:opacity-50`}>
                 {busy ? 'Checking…' : 'Check now'}
               </button>
             )}
-            <button onClick={remove} disabled={busy} className="text-sm text-red-500 hover:text-red-700 cursor-pointer disabled:opacity-50">
+            <button onClick={remove} disabled={busy} className={`${actionClass} text-red-500 hover:text-red-700 cursor-pointer disabled:opacity-50`}>
               Delete
             </button>
           </div>
@@ -201,15 +252,15 @@ function DomainRow({ d, isAdmin, onChange }: { d: DomainSetting; isAdmin: boolea
         <span className="text-text-muted">Fallback:</span>
         {editing ? (
           <>
-            <input aria-label="Fallback URL" value={fallback} onChange={(e) => setFallback(e.target.value)} className={`flex-1 ${inputClass}`} />
-            <button onClick={saveFallback} disabled={busy} className="text-sm text-accent hover:underline cursor-pointer">Save</button>
-            <button onClick={() => { setEditing(false); setFallback(d.fallback_url) }} className="text-sm text-text-muted hover:underline cursor-pointer">Cancel</button>
+            <input aria-label="Fallback URL" value={fallback} onChange={(e) => setFallback(e.target.value)} className={`w-full sm:w-auto sm:flex-1 ${inputClass}`} />
+            <button onClick={saveFallback} disabled={busy} className={`${actionClass} text-accent hover:underline cursor-pointer`}>Save</button>
+            <button onClick={() => { setEditing(false); setFallback(d.fallback_url) }} className={`${actionClass} text-text-muted hover:underline cursor-pointer`}>Cancel</button>
           </>
         ) : (
           <>
-            <span className="truncate">{d.fallback_url}</span>
+            <span className="min-w-0 break-all">{d.fallback_url}</span>
             {isAdmin && secondary && (
-              <button onClick={() => setEditing(true)} className="text-sm text-text-muted hover:text-text cursor-pointer">Edit</button>
+              <button onClick={() => setEditing(true)} className={`${actionClass} text-text-muted hover:text-text cursor-pointer`}>Edit</button>
             )}
             {!secondary && <span className="text-xs text-text-muted">(Terraform variable default_redirect_url)</span>}
           </>
@@ -217,7 +268,7 @@ function DomainRow({ d, isAdmin, onChange }: { d: DomainSetting; isAdmin: boolea
       </div>
 
       {(d.error || error) && (
-        <p className="text-xs text-red-600">{error || d.error}</p>
+        <p className="text-xs text-red-600 break-words">{error || d.error}</p>
       )}
       {d.status !== 'failed' && <DomainRecords d={d} polling={!pollTimedOut} />}
     </div>
@@ -254,23 +305,23 @@ function AddDomainForm({ zones, onAdded }: { zones: string[]; onAdded: () => voi
 
   return (
     <div className="border border-border rounded p-4 space-y-3">
-      <div className="flex flex-wrap gap-3">
-        <input aria-label="Domain" placeholder="go.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} className={`flex-1 ${inputClass}`} />
-        <select aria-label="DNS mode" value={mode} onChange={(e) => setMode(e.target.value as DNSMode)} className={inputClass}>
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
+        <input aria-label="Domain" placeholder="go.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} className={`w-full sm:w-auto sm:flex-1 sm:min-w-40 ${inputClass}`} />
+        <select aria-label="DNS mode" value={mode} onChange={(e) => setMode(e.target.value as DNSMode)} className={`w-full sm:w-auto ${inputClass}`}>
           <option value="external">External DNS</option>
           <option value="route53" disabled={zones.length === 0}>
             Route 53{zones.length === 0 ? ' (no hosted zones configured)' : ''}
           </option>
         </select>
         {mode === 'route53' && (
-          <select aria-label="Hosted zone" value={zone || zones[0]} onChange={(e) => setZone(e.target.value)} className={inputClass}>
+          <select aria-label="Hosted zone" value={zone || zones[0]} onChange={(e) => setZone(e.target.value)} className={`w-full sm:w-auto ${inputClass}`}>
             {zones.map((z) => (
               <option key={z} value={z}>{z}</option>
             ))}
           </select>
         )}
-        <input aria-label="Fallback URL" placeholder="https://fallback.example.com" value={fallback} onChange={(e) => setFallback(e.target.value)} className={`flex-2 ${inputClass}`} />
-        <button onClick={submit} disabled={busy} className="bg-accent text-white rounded px-4 py-1.5 text-sm font-medium hover:bg-accent-light cursor-pointer disabled:opacity-50">
+        <input aria-label="Fallback URL" placeholder="https://fallback.example.com" value={fallback} onChange={(e) => setFallback(e.target.value)} className={`w-full sm:w-auto sm:flex-2 sm:min-w-48 ${inputClass}`} />
+        <button onClick={submit} disabled={busy} className="min-h-10 bg-accent text-white rounded px-4 text-sm font-medium hover:bg-accent-light cursor-pointer disabled:opacity-50">
           {busy ? 'Adding…' : 'Add'}
         </button>
       </div>
@@ -278,7 +329,7 @@ function AddDomainForm({ zones, onAdded }: { zones: string[]; onAdded: () => voi
         The fallback URL is where the domain's root and unknown slugs redirect to. After adding, set the
         certificate validation record shown below; the domain is checked every five minutes, or use "Check now".
       </p>
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-600 break-words">{error}</p>}
     </div>
   )
 }
@@ -317,19 +368,19 @@ export default function Domains() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight text-text">Domains</h1>
         <button
           onClick={() => isAdmin && setShowAdd(!showAdd)}
           disabled={!isAdmin}
-          className={`rounded px-3 py-1.5 text-sm font-medium ${isAdmin ? 'bg-accent text-white hover:bg-accent-light cursor-pointer' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+          className={`min-h-10 shrink-0 rounded px-4 text-sm font-medium ${isAdmin ? 'bg-accent text-white hover:bg-accent-light cursor-pointer' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
         >
           {showAdd ? 'Cancel' : 'Add domain'}
         </button>
       </div>
 
       {error && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 break-words">{error}</div>
       )}
 
       {showAdd && isAdmin && <AddDomainForm zones={zones} onAdded={() => { setShowAdd(false); load() }} />}
