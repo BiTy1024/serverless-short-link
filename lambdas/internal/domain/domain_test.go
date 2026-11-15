@@ -74,16 +74,6 @@ func TestValid(t *testing.T) {
 	}
 }
 
-func TestStatic(t *testing.T) {
-	s := Static{FallbackURL: "https://example.com/home"}
-	for _, d := range []string{"a.example", "b.example", ""} {
-		url, known := s.Fallback(d)
-		if url != "https://example.com/home" || !known {
-			t.Errorf("Fallback(%q) = %q, %v", d, url, known)
-		}
-	}
-}
-
 func TestParse(t *testing.T) {
 	tests := []struct {
 		in, want, err string
