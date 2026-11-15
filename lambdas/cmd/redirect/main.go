@@ -1,5 +1,5 @@
 // Command redirect is the Lambda behind every non-API route: it resolves the
-// slug on the requested domain and answers with a 301.
+// slug on the requested domain and answers with an uncached 302.
 package main
 
 import (
