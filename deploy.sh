@@ -43,6 +43,9 @@ deploy_terraform() {
 
   echo "Using Terraform config: $tfvars_abs"
 
+  echo "=== Building Lambdas ==="
+  make -C lambdas build
+
   echo "=== terraform init ==="
   (cd terraform && terraform init -backend-config=backend.hcl -reconfigure)
 

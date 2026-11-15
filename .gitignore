@@ -6,6 +6,9 @@ frontend/node_modules/
 frontend/dist/
 frontend/.env
 
+# Go Lambda binaries and their zips
+lambdas/build/
+
 # Terraform
 # (commit .terraform.lock.hcl for reproducible provider versions)
 terraform/.terraform/
