@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { api, type DNSMode, type DNSRecord, type DomainSetting, type DomainStatus } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 
@@ -15,6 +15,14 @@ const statusStyle: Record<DomainStatus, string> = {
   active: 'bg-green-50 text-green-800 border-green-200',
   failed: 'bg-red-50 text-red-700 border-red-200',
 }
+
+// While ACM has not yet filled in a new certificate's validation record, the
+// page asks for it every RECORD_POLL_MS for at most RECORD_POLL_LIMIT_MS.
+// Pending domains are reloaded every STATUS_POLL_MS to pick up the scheduled
+// check's progress.
+const RECORD_POLL_MS = 5_000
+const RECORD_POLL_LIMIT_MS = 120_000
+const STATUS_POLL_MS = 60_000
 
 const inputClass =
   'border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent'
@@ -77,14 +85,22 @@ function RecordTable({ title, hint, records }: { title: string; hint: string; re
 
 // DomainRecords shows the records a person still has to set. In route53 mode
 // the service writes them itself.
-function DomainRecords({ d }: { d: DomainSetting }) {
+function DomainRecords({ d, polling }: { d: DomainSetting; polling: boolean }) {
   if (d.dns_mode === 'route53') {
     return <p className="text-xs text-text-muted">DNS records are written to Route 53 hosted zone {d.hosted_zone_id}.</p>
   }
+  const awaitingRecord = d.status === 'pending_validation' && d.validation_records.length === 0
+  const showsRecords = d.validation_records.length > 0 || d.dns_records.length > 0
   return (
     <div className="space-y-3">
-      {d.status === 'pending_validation' && d.validation_records.length === 0 && (
-        <p className="text-xs text-text-muted">The certificate's validation record is not available yet. Check again in a few seconds.</p>
+      {awaitingRecord && polling && (
+        <p className="flex items-center gap-2 text-sm text-text">
+          <span className="inline-block size-3.5 rounded-full border-2 border-accent border-t-transparent animate-spin" aria-hidden="true" />
+          Requesting the certificate's DNS record…
+        </p>
+      )}
+      {awaitingRecord && !polling && (
+        <p className="text-sm text-text">The certificate's DNS record is not available yet. Use "Check now" to ask again.</p>
       )}
       {(d.status === 'pending_validation' || d.role === 'primary') && (
         <RecordTable
@@ -98,6 +114,11 @@ function DomainRecords({ d }: { d: DomainSetting }) {
         hint="Point the domain at the service with these CNAME records. A domain apex cannot be a CNAME."
         records={d.dns_records}
       />
+      {showsRecords && (
+        <p className="text-xs text-text-muted">
+          At Cloudflare and similar hosts, set each CNAME to "DNS only", not proxied.
+        </p>
+      )}
     </div>
   )
 }
@@ -108,6 +129,28 @@ function DomainRow({ d, isAdmin, onChange }: { d: DomainSetting; isAdmin: boolea
   const [editing, setEditing] = useState(false)
   const [fallback, setFallback] = useState(d.fallback_url)
   const secondary = d.role === 'secondary'
+  const awaitingRecord = secondary && d.dns_mode === 'external' &&
+    d.status === 'pending_validation' && d.validation_records.length === 0
+  const [pollTimedOut, setPollTimedOut] = useState(false)
+
+  // Only admins may run a check; everyone else reloads the list.
+  const refreshRecord = useEffectEvent(() => {
+    const action = isAdmin ? api.checkDomain(d.domain) : Promise.resolve()
+    action.then(onChange, () => {})
+  })
+
+  useEffect(() => {
+    if (!awaitingRecord) return
+    const poll = setInterval(refreshRecord, RECORD_POLL_MS)
+    const limit = setTimeout(() => {
+      clearInterval(poll)
+      setPollTimedOut(true)
+    }, RECORD_POLL_LIMIT_MS)
+    return () => {
+      clearInterval(poll)
+      clearTimeout(limit)
+    }
+  }, [awaitingRecord])
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
@@ -176,7 +219,7 @@ function DomainRow({ d, isAdmin, onChange }: { d: DomainSetting; isAdmin: boolea
       {(d.error || error) && (
         <p className="text-xs text-red-600">{error || d.error}</p>
       )}
-      {d.status !== 'failed' && <DomainRecords d={d} />}
+      {d.status !== 'failed' && <DomainRecords d={d} polling={!pollTimedOut} />}
     </div>
   )
 }
@@ -260,6 +303,15 @@ export default function Domains() {
   }
 
   useEffect(() => { load() }, [])
+
+  const anyPending = domains.some((d) =>
+    d.role === 'secondary' && (d.status === 'pending_validation' || d.status === 'pending_dns'))
+  const reload = useEffectEvent(load)
+  useEffect(() => {
+    if (!anyPending) return
+    const poll = setInterval(reload, STATUS_POLL_MS)
+    return () => clearInterval(poll)
+  }, [anyPending])
 
   if (loading) return <p className="text-text-muted text-sm">Loading...</p>
 
