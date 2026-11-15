@@ -33,6 +33,12 @@ variable "user_pool_client_id" {
   description = "Cognito User Pool Client ID used as JWT audience"
 }
 
+variable "additional_jwt_audiences" {
+  type        = list(string)
+  description = "Further Cognito app client IDs whose tokens the API accepts"
+  default     = []
+}
+
 variable "redirect_lambda_invoke_arn" {
   type = string
 }
