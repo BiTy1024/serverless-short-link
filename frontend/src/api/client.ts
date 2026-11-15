@@ -32,7 +32,8 @@ async function request(path: string, options: RequestInit = {}) {
 }
 
 export interface Link {
-  short_path: string
+  domain: string
+  slug: string
   target_url: string
   created_at: string
   updated_at: string
@@ -40,7 +41,8 @@ export interface Link {
 
 export interface StatsOverview {
   stats: Array<{
-    path: string
+    domain: string
+    slug: string
     clicks: number
     target_url: string | null
     first_click: string | null
@@ -50,40 +52,60 @@ export interface StatsOverview {
 }
 
 export interface StatsDetail {
-  path: string
+  domain: string
+  slug: string
   clicks: number
   target_url: string | null
   recent_clicks: Array<{ timestamp: string }>
 }
 
-export const api = {
-  getLinks: (): Promise<{ links: Link[]; count: number }> =>
-    request('/api/links'),
+export interface TimeFilter {
+  days?: number
+  from?: string
+  to?: string
+}
 
-  createLink: (short_path: string, target_url: string): Promise<Link> =>
+// linkPath addresses one link as /<domain>/<slug>, each segment escaped.
+function linkPath(domain: string, slug: string) {
+  return `/${encodeURIComponent(domain)}/${encodeURIComponent(slug)}`
+}
+
+function queryString(params: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, String(value))
+  }
+  const qs = query.toString()
+  return qs ? `?${qs}` : ''
+}
+
+// shortUrl is the public URL a link is served at.
+export function shortUrl(domain: string, slug: string) {
+  return `https://${domain}/${slug}`
+}
+
+export const api = {
+  getLinks: (domain?: string): Promise<{ links: Link[]; count: number }> =>
+    request(`/api/links${queryString({ domain })}`),
+
+  createLink: (domain: string, slug: string, target_url: string): Promise<Link> =>
     request('/api/links', {
       method: 'POST',
-      body: JSON.stringify({ short_path, target_url }),
+      body: JSON.stringify({ domain, slug, target_url }),
     }),
 
-  updateLink: (path: string, target_url: string): Promise<Link> =>
-    request(`/api/links/${path}`, {
+  updateLink: (domain: string, slug: string, target_url: string): Promise<Link> =>
+    request(`/api/links${linkPath(domain, slug)}`, {
       method: 'PUT',
       body: JSON.stringify({ target_url }),
     }),
 
-  deleteLink: (path: string): Promise<null> =>
-    request(`/api/links/${path}`, { method: 'DELETE' }),
+  deleteLink: (domain: string, slug: string): Promise<null> =>
+    request(`/api/links${linkPath(domain, slug)}`, { method: 'DELETE' }),
 
-  getStats: (): Promise<StatsOverview> =>
-    request('/api/stats?linked_only=true'),
+  getStats: (params?: { domain?: string } & TimeFilter): Promise<StatsOverview> =>
+    request(`/api/stats${queryString({ linked_only: 'true', ...params })}`),
 
-  getStatsByPath: (path: string, params?: { days?: number; from?: string; to?: string }): Promise<StatsDetail> => {
-    const query = new URLSearchParams()
-    if (params?.days) query.set('days', String(params.days))
-    if (params?.from) query.set('from', params.from)
-    if (params?.to) query.set('to', params.to)
-    const qs = query.toString()
-    return request(`/api/stats/${path}${qs ? `?${qs}` : ''}`)
-  },
+  getLinkStats: (domain: string, slug: string, params?: TimeFilter): Promise<StatsDetail> =>
+    request(`/api/stats${linkPath(domain, slug)}${queryString({ ...params })}`),
 }

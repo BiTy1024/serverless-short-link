@@ -1,19 +1,27 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import QRCode from 'qrcode'
-import { api, type Link } from '../api/client'
+import { api, shortUrl, type Link } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 
-const DOMAIN = import.meta.env.VITE_API_BASE
+// NEW_DOMAIN is the select value that switches the create form to free-text domain entry.
+const NEW_DOMAIN = '__new__'
 
-function downloadQR(shortPath: string) {
-  const url = `${DOMAIN}/${shortPath}`
-  QRCode.toString(url, { type: 'svg', margin: 1 }, (err, svg) => {
+function linkKey(link: Pick<Link, 'domain' | 'slug'>) {
+  return `${link.domain}/${link.slug}`
+}
+
+function detailPath(link: Pick<Link, 'domain' | 'slug'>) {
+  return `/links/${encodeURIComponent(link.domain)}/${encodeURIComponent(link.slug)}`
+}
+
+function downloadQR(link: Link) {
+  QRCode.toString(shortUrl(link.domain, link.slug), { type: 'svg', margin: 1 }, (err, svg) => {
     if (err) return
     const blob = new Blob([svg], { type: 'image/svg+xml' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `qr-${shortPath}.svg`
+    a.download = `qr-${link.domain}-${link.slug}.svg`
     a.click()
     URL.revokeObjectURL(a.href)
   })
@@ -23,11 +31,14 @@ export default function Links() {
   const { isAdmin } = useAuth()
   const [links, setLinks] = useState<Link[]>([])
   const [search, setSearch] = useState('')
+  const [domainFilter, setDomainFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
-  const [editPath, setEditPath] = useState<string | null>(null)
+  const [editKey, setEditKey] = useState<string | null>(null)
   const [editUrl, setEditUrl] = useState('')
-  const [newPath, setNewPath] = useState('')
+  const [newDomainChoice, setNewDomainChoice] = useState('')
+  const [newDomainText, setNewDomainText] = useState('')
+  const [newSlug, setNewSlug] = useState('')
   const [newUrl, setNewUrl] = useState('')
   const [error, setError] = useState('')
 
@@ -37,18 +48,35 @@ export default function Links() {
 
   useEffect(() => { loadLinks() }, [])
 
-  const filtered = links.filter(
-    (l) =>
-      l.short_path.includes(search.toLowerCase()) ||
-      l.target_url.toLowerCase().includes(search.toLowerCase())
+  // The domains offered in the filter and the create form are the ones that
+  // already have links.
+  const domains = useMemo(
+    () => [...new Set(links.map((l) => l.domain))].sort(),
+    [links]
   )
+
+  const query = search.toLowerCase()
+  const filtered = links
+    .filter((l) => !domainFilter || l.domain === domainFilter)
+    .filter(
+      (l) =>
+        l.slug.includes(query) ||
+        l.domain.includes(query) ||
+        l.target_url.toLowerCase().includes(query)
+    )
+    .sort((a, b) => linkKey(a).localeCompare(linkKey(b)))
+
+  const domainChoice = newDomainChoice || domains[0] || NEW_DOMAIN
+  const newDomain = domainChoice === NEW_DOMAIN ? newDomainText : domainChoice
 
   const handleCreate = async () => {
     setError('')
     try {
-      await api.createLink(newPath, newUrl)
-      setNewPath('')
+      await api.createLink(newDomain.trim(), newSlug, newUrl)
+      setNewSlug('')
       setNewUrl('')
+      setNewDomainText('')
+      setNewDomainChoice('')
       setShowCreate(false)
       loadLinks()
     } catch (err: unknown) {
@@ -56,21 +84,21 @@ export default function Links() {
     }
   }
 
-  const handleUpdate = async (path: string) => {
+  const handleUpdate = async (link: Link) => {
     setError('')
     try {
-      await api.updateLink(path, editUrl)
-      setEditPath(null)
+      await api.updateLink(link.domain, link.slug, editUrl)
+      setEditKey(null)
       loadLinks()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Update failed')
     }
   }
 
-  const handleDelete = async (path: string) => {
-    if (!confirm(`Delete /${path}?`)) return
+  const handleDelete = async (link: Link) => {
+    if (!confirm(`Delete ${shortUrl(link.domain, link.slug)}?`)) return
     try {
-      await api.deleteLink(path)
+      await api.deleteLink(link.domain, link.slug)
       loadLinks()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Delete failed')
@@ -100,14 +128,36 @@ export default function Links() {
 
       {showCreate && (
         <div className="border border-border rounded p-4 space-y-3">
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
+            <select
+              aria-label="Domain"
+              value={domainChoice}
+              onChange={(e) => setNewDomainChoice(e.target.value)}
+              className="border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent"
+            >
+              {domains.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+              <option value={NEW_DOMAIN}>Other domain…</option>
+            </select>
+            {domainChoice === NEW_DOMAIN && (
+              <input
+                aria-label="New domain"
+                placeholder="go.example.com"
+                value={newDomainText}
+                onChange={(e) => setNewDomainText(e.target.value)}
+                className="flex-1 border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent"
+              />
+            )}
             <input
-              placeholder="path"
-              value={newPath}
-              onChange={(e) => setNewPath(e.target.value)}
+              aria-label="Slug"
+              placeholder="slug"
+              value={newSlug}
+              onChange={(e) => setNewSlug(e.target.value)}
               className="flex-1 border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent"
             />
             <input
+              aria-label="Target URL"
               placeholder="https://target-url.com"
               value={newUrl}
               onChange={(e) => setNewUrl(e.target.value)}
@@ -120,30 +170,49 @@ export default function Links() {
               Save
             </button>
           </div>
+          {newDomain && newSlug && (
+            <p className="text-xs text-text-muted font-mono">{shortUrl(newDomain.trim().toLowerCase(), newSlug)}</p>
+          )}
         </div>
       )}
 
-      <input
-        placeholder="Search links..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="w-full border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-accent"
-      />
+      <div className="flex gap-3">
+        <select
+          aria-label="Filter by domain"
+          value={domainFilter}
+          onChange={(e) => setDomainFilter(e.target.value)}
+          className="border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-accent"
+        >
+          <option value="">All domains</option>
+          {domains.map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+        <input
+          placeholder="Search links..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-accent"
+        />
+      </div>
 
       <div className="border border-border rounded divide-y divide-border">
         {filtered.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-text-muted">No links found.</p>
         ) : (
           filtered.map((link) => (
-            <div key={link.short_path} className="px-4 py-3 flex items-center gap-4">
+            <div key={linkKey(link)} className="px-4 py-3 flex items-center gap-4">
+              <span className="text-sm text-text-muted min-w-[140px] truncate" title={link.domain}>
+                {link.domain}
+              </span>
               <RouterLink
-                to={`/links/${link.short_path}`}
-                className="font-mono text-sm text-accent hover:underline min-w-[120px]"
+                to={detailPath(link)}
+                className="font-mono text-sm text-accent hover:underline min-w-[200px]"
               >
-                /{link.short_path}
+                {shortUrl(link.domain, link.slug)}
               </RouterLink>
 
-              {editPath === link.short_path ? (
+              {editKey === linkKey(link) ? (
                 <div className="flex-1 flex gap-2">
                   <input
                     value={editUrl}
@@ -151,13 +220,13 @@ export default function Links() {
                     className="flex-1 border border-border rounded px-2 py-1 text-sm focus:outline-none focus:border-accent"
                   />
                   <button
-                    onClick={() => handleUpdate(link.short_path)}
+                    onClick={() => handleUpdate(link)}
                     className="text-sm text-accent hover:underline cursor-pointer"
                   >
                     Save
                   </button>
                   <button
-                    onClick={() => setEditPath(null)}
+                    onClick={() => setEditKey(null)}
                     className="text-sm text-text-muted hover:underline cursor-pointer"
                   >
                     Cancel
@@ -169,27 +238,27 @@ export default function Links() {
                     {link.target_url}
                   </span>
                   <RouterLink
-                    to={`/links/${link.short_path}`}
+                    to={detailPath(link)}
                     className="text-sm text-text-muted hover:text-text cursor-pointer"
                   >
                     Stats
                   </RouterLink>
                   <button
-                    onClick={() => isAdmin && (setEditPath(link.short_path), setEditUrl(link.target_url))}
+                    onClick={() => isAdmin && (setEditKey(linkKey(link)), setEditUrl(link.target_url))}
                     disabled={!isAdmin}
                     className={`text-sm ${isAdmin ? 'text-text-muted hover:text-text cursor-pointer' : 'text-gray-300 cursor-not-allowed'}`}
                   >
                     Edit
                   </button>
                   <button
-                    onClick={() => isAdmin && handleDelete(link.short_path)}
+                    onClick={() => isAdmin && handleDelete(link)}
                     disabled={!isAdmin}
                     className={`text-sm ${isAdmin ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-not-allowed'}`}
                   >
                     Delete
                   </button>
                   <button
-                    onClick={() => downloadQR(link.short_path)}
+                    onClick={() => downloadQR(link)}
                     className="text-sm text-text-muted hover:text-text cursor-pointer"
                   >
                     QR
