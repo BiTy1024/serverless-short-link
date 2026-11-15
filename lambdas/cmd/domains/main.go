@@ -39,6 +39,7 @@ func main() {
 			Client: apigatewayv2.NewFromConfig(cfg),
 			APIID:  env.Require("API_ID"),
 			Stage:  env.Require("API_STAGE"),
+			Stack:  env.Require("STACK_NAME"),
 		},
 		Zones:        &awsdomains.Zones{Client: route53.NewFromConfig(cfg)},
 		Resolver:     net.DefaultResolver,

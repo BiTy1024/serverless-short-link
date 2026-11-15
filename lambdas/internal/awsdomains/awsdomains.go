@@ -8,6 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,9 +25,10 @@ import (
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/settings"
 )
 
-// StackTag is the tag key that marks a certificate as requested by a stack;
-// its value is the stack name. Only certificates tagged with this stack's
-// name are deleted, and the IAM policy enforces the same.
+// StackTag is the tag key that marks a certificate or custom domain as
+// created by a stack; its value is the stack name. Only certificates and
+// custom domains tagged with this stack's name are deleted; for
+// certificates the IAM policy enforces the same.
 const StackTag = "short-link-stack"
 
 // Certs implements domains.Certs with ACM in the Lambda's region.
@@ -105,38 +109,102 @@ func (c *Certs) Delete(ctx context.Context, arn string) (bool, error) {
 	return true, nil
 }
 
+// GatewayAPI is the part of the API Gateway v2 client Gateway uses.
+type GatewayAPI interface {
+	GetDomainName(ctx context.Context, in *apigatewayv2.GetDomainNameInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.GetDomainNameOutput, error)
+	CreateDomainName(ctx context.Context, in *apigatewayv2.CreateDomainNameInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.CreateDomainNameOutput, error)
+	DeleteDomainName(ctx context.Context, in *apigatewayv2.DeleteDomainNameInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.DeleteDomainNameOutput, error)
+	GetApiMappings(ctx context.Context, in *apigatewayv2.GetApiMappingsInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.GetApiMappingsOutput, error)
+	CreateApiMapping(ctx context.Context, in *apigatewayv2.CreateApiMappingInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.CreateApiMappingOutput, error)
+	DeleteApiMapping(ctx context.Context, in *apigatewayv2.DeleteApiMappingInput, opts ...func(*apigatewayv2.Options)) (*apigatewayv2.DeleteApiMappingOutput, error)
+}
+
+// ErrForeignDomain is returned when a custom domain of the requested name
+// exists but belongs to someone else: it lacks the stack tag and is mapped
+// to another API.
+var ErrForeignDomain = errors.New("custom domain exists and is mapped to another API")
+
 // Gateway implements domains.Gateway with API Gateway v2 custom domains
-// mapped to one stage of one HTTP API.
+// mapped to one stage of one HTTP API. It creates custom domains with
+// StackTag and never changes or removes another API's mappings or a custom
+// domain without the tag.
 type Gateway struct {
-	Client *apigatewayv2.Client
+	Client GatewayAPI
 	APIID  string
 	Stage  string
+	Stack  string
+}
+
+type gatewayDomain struct {
+	endpoint domains.Endpoint
+	owned    bool
+}
+
+func (g *Gateway) get(ctx context.Context, domain string) (gatewayDomain, bool, error) {
+	out, err := g.Client.GetDomainName(ctx, &apigatewayv2.GetDomainNameInput{DomainName: aws.String(domain)})
+	var notFound *gwtypes.NotFoundException
+	if errors.As(err, &notFound) {
+		return gatewayDomain{}, false, nil
+	}
+	if err != nil {
+		return gatewayDomain{}, false, err
+	}
+	if len(out.DomainNameConfigurations) == 0 {
+		return gatewayDomain{}, false, errors.New("custom domain " + domain + " has no configuration")
+	}
+	cfg := out.DomainNameConfigurations[0]
+	return gatewayDomain{
+		endpoint: domains.Endpoint{
+			Target:       aws.ToString(cfg.ApiGatewayDomainName),
+			HostedZoneID: aws.ToString(cfg.HostedZoneId),
+		},
+		owned: out.Tags[StackTag] == g.Stack,
+	}, true, nil
 }
 
 // FindDomain returns the regional endpoint of the custom domain.
 func (g *Gateway) FindDomain(ctx context.Context, domain string) (domains.Endpoint, bool, error) {
-	out, err := g.Client.GetDomainName(ctx, &apigatewayv2.GetDomainNameInput{DomainName: aws.String(domain)})
-	var notFound *gwtypes.NotFoundException
-	if errors.As(err, &notFound) {
-		return domains.Endpoint{}, false, nil
-	}
-	if err != nil {
-		return domains.Endpoint{}, false, err
-	}
-	if len(out.DomainNameConfigurations) == 0 {
-		return domains.Endpoint{}, false, errors.New("custom domain " + domain + " has no configuration")
-	}
-	cfg := out.DomainNameConfigurations[0]
-	return domains.Endpoint{
-		Target:       aws.ToString(cfg.ApiGatewayDomainName),
-		HostedZoneID: aws.ToString(cfg.HostedZoneId),
-	}, true, nil
+	d, found, err := g.get(ctx, domain)
+	return d.endpoint, found, err
 }
 
-// EnsureDomain creates the regional custom domain (TLS 1.2) and its mapping
-// to the API's stage unless they exist.
+// mappings returns every API mapping of the custom domain.
+func (g *Gateway) mappings(ctx context.Context, domain string) ([]gwtypes.ApiMapping, error) {
+	var all []gwtypes.ApiMapping
+	var next *string
+	for {
+		out, err := g.Client.GetApiMappings(ctx, &apigatewayv2.GetApiMappingsInput{DomainName: aws.String(domain), NextToken: next})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, out.Items...)
+		if out.NextToken == nil {
+			return all, nil
+		}
+		next = out.NextToken
+	}
+}
+
+// foreign reports whether one of the mappings points at another API.
+func (g *Gateway) foreign(ms []gwtypes.ApiMapping) bool {
+	for _, m := range ms {
+		if aws.ToString(m.ApiId) != g.APIID {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) mapped(ms []gwtypes.ApiMapping) bool {
+	return slices.ContainsFunc(ms, func(m gwtypes.ApiMapping) bool { return aws.ToString(m.ApiId) == g.APIID })
+}
+
+// EnsureDomain creates the regional custom domain (TLS 1.2, tagged with
+// StackTag) and its mapping to the API's stage unless they exist. An
+// existing custom domain is used only when it carries the stack tag or is
+// mapped to no API but this one; otherwise it fails with ErrForeignDomain.
 func (g *Gateway) EnsureDomain(ctx context.Context, domain, certARN string) (domains.Endpoint, error) {
-	ep, found, err := g.FindDomain(ctx, domain)
+	d, found, err := g.get(ctx, domain)
 	if err != nil {
 		return domains.Endpoint{}, err
 	}
@@ -148,29 +216,44 @@ func (g *Gateway) EnsureDomain(ctx context.Context, domain, certARN string) (dom
 				EndpointType:   gwtypes.EndpointTypeRegional,
 				SecurityPolicy: gwtypes.SecurityPolicyTls12,
 			}},
+			Tags: map[string]string{StackTag: g.Stack},
 		})
+		// A conflict means it was created concurrently, possibly by someone
+		// else; the ownership check below decides.
 		var conflict *gwtypes.ConflictException
 		if err != nil && !errors.As(err, &conflict) {
 			return domains.Endpoint{}, err
 		}
-		if ep, found, err = g.FindDomain(ctx, domain); err != nil {
+		if d, found, err = g.get(ctx, domain); err != nil {
 			return domains.Endpoint{}, err
 		} else if !found {
 			return domains.Endpoint{}, errors.New("custom domain " + domain + " not found after creating it")
 		}
 	}
-	return ep, g.ensureMapping(ctx, domain)
+	if !d.owned {
+		ms, err := g.mappings(ctx, domain)
+		if err != nil {
+			return domains.Endpoint{}, err
+		}
+		if g.foreign(ms) {
+			return domains.Endpoint{}, fmt.Errorf("%s: %w", domain, ErrForeignDomain)
+		}
+	}
+	return d.endpoint, g.ensureMapping(ctx, domain)
 }
 
+// ensureMapping maps the custom domain to the API's stage unless it is.
+// Another API's mapping fails it with ErrForeignDomain.
 func (g *Gateway) ensureMapping(ctx context.Context, domain string) error {
-	out, err := g.Client.GetApiMappings(ctx, &apigatewayv2.GetApiMappingsInput{DomainName: aws.String(domain)})
+	ms, err := g.mappings(ctx, domain)
 	if err != nil {
 		return err
 	}
-	for _, m := range out.Items {
-		if aws.ToString(m.ApiId) == g.APIID {
-			return nil
-		}
+	if g.mapped(ms) {
+		return nil
+	}
+	if g.foreign(ms) {
+		return fmt.Errorf("%s: %w", domain, ErrForeignDomain)
 	}
 	_, err = g.Client.CreateApiMapping(ctx, &apigatewayv2.CreateApiMappingInput{
 		ApiId:      aws.String(g.APIID),
@@ -178,24 +261,39 @@ func (g *Gateway) ensureMapping(ctx context.Context, domain string) error {
 		Stage:      aws.String(g.Stage),
 	})
 	var conflict *gwtypes.ConflictException
-	if errors.As(err, &conflict) {
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	// A mapping was created concurrently; it counts only when it is ours.
+	if ms, err = g.mappings(ctx, domain); err != nil {
+		return err
+	}
+	if g.mapped(ms) {
 		return nil
 	}
-	return err
+	return fmt.Errorf("%s: %w", domain, ErrForeignDomain)
 }
 
-// DeleteDomain removes every API mapping of the custom domain, then the
-// custom domain.
+// DeleteDomain removes the API's mappings of the custom domain, then the
+// custom domain itself when it carries the stack tag and has no mappings
+// left. Another API's mappings and untagged custom domains stay.
 func (g *Gateway) DeleteDomain(ctx context.Context, domain string) error {
 	var notFound *gwtypes.NotFoundException
-	out, err := g.Client.GetApiMappings(ctx, &apigatewayv2.GetApiMappingsInput{DomainName: aws.String(domain)})
+	d, found, err := g.get(ctx, domain)
+	if err != nil || !found {
+		return err
+	}
+	ms, err := g.mappings(ctx, domain)
 	if errors.As(err, &notFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	for _, m := range out.Items {
+	for _, m := range ms {
+		if aws.ToString(m.ApiId) != g.APIID {
+			continue
+		}
 		_, err := g.Client.DeleteApiMapping(ctx, &apigatewayv2.DeleteApiMappingInput{
 			ApiMappingId: m.ApiMappingId,
 			DomainName:   aws.String(domain),
@@ -203,6 +301,10 @@ func (g *Gateway) DeleteDomain(ctx context.Context, domain string) error {
 		if err != nil && !errors.As(err, &notFound) {
 			return err
 		}
+	}
+	if !d.owned || g.foreign(ms) {
+		slog.Warn("Custom domain left in place", "domain", domain, "tagged", d.owned, "other_mappings", g.foreign(ms))
+		return nil
 	}
 	_, err = g.Client.DeleteDomainName(ctx, &apigatewayv2.DeleteDomainNameInput{DomainName: aws.String(domain)})
 	if errors.As(err, &notFound) {

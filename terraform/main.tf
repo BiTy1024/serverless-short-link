@@ -8,21 +8,21 @@ locals {
   domains_param_arn  = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.domains_path}"
   acm_cert_arns      = "arn:aws:acm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:certificate/*"
   apigateway_domains = "arn:aws:apigateway:${var.aws_region}::/domainnames"
-  # Tag key the domains Lambda puts on the certificates it requests; it only
-  # deletes certificates that carry it with this stack's name.
-  cert_stack_tag = "short-link-stack"
+  # Tag key the domains Lambda puts on the certificates and custom domains
+  # it creates; it only deletes those that carry it with this stack's name.
+  stack_tag = "short-link-stack"
   # Conditions for actions that set tags: exactly the stack tag, with this
   # stack's name.
-  cert_stack_tag_request = [
+  stack_tag_request = [
     {
       test     = "StringEquals"
-      variable = "aws:RequestTag/${local.cert_stack_tag}"
+      variable = "aws:RequestTag/${local.stack_tag}"
       values   = [var.stack_name]
     },
     {
       test     = "ForAllValues:StringEquals"
       variable = "aws:TagKeys"
-      values   = [local.cert_stack_tag]
+      values   = [local.stack_tag]
     },
   ]
 }
@@ -208,7 +208,7 @@ module "lambda_domains" {
       effect    = "Allow"
       actions   = ["acm:RequestCertificate"]
       resources = ["*"]
-      conditions = concat(local.cert_stack_tag_request, [{
+      conditions = concat(local.stack_tag_request, [{
         test     = "StringEquals"
         variable = "acm:ValidationMethod"
         values   = ["DNS"]
@@ -222,7 +222,7 @@ module "lambda_domains" {
       effect     = "Allow"
       actions    = ["acm:AddTagsToCertificate"]
       resources  = [local.acm_cert_arns]
-      conditions = local.cert_stack_tag_request
+      conditions = local.stack_tag_request
     },
     {
       effect = "Allow"
@@ -238,7 +238,7 @@ module "lambda_domains" {
       resources = [local.acm_cert_arns]
       conditions = [{
         test     = "StringEquals"
-        variable = "aws:ResourceTag/${local.cert_stack_tag}"
+        variable = "aws:ResourceTag/${local.stack_tag}"
         values   = [var.stack_name]
       }]
     },
@@ -253,6 +253,13 @@ module "lambda_domains" {
       effect    = "Allow"
       actions   = ["apigateway:AddCertificateToDomain", "apigateway:RemoveCertificateFromDomain"]
       resources = ["${local.apigateway_domains}/*"]
+    },
+    {
+      # Tags given to CreateDomainName; only the stack tag.
+      effect     = "Allow"
+      actions    = ["apigateway:POST"]
+      resources  = ["arn:aws:apigateway:${var.aws_region}::/tags/*"]
+      conditions = local.stack_tag_request
     },
     ], length(var.route53_zone_ids) == 0 ? [] : [
     {
