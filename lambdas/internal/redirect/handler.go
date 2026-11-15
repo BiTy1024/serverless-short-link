@@ -1,5 +1,5 @@
-// Package redirect resolves a short path to its target URL, records the click
-// and answers with a 301.
+// Package redirect resolves (domain, slug) to its target URL, records the
+// click and answers with a 301. The domain is the host the request was sent to.
 package redirect
 
 import (
@@ -12,20 +12,27 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 )
 
 // Store is the data access the redirect handler needs.
 type Store interface {
-	GetLink(ctx context.Context, shortPath string) (store.Link, bool, error)
+	GetLink(ctx context.Context, domain, slug string) (store.Link, bool, error)
 	PutClick(ctx context.Context, click store.Click) error
+}
+
+// DomainConfig holds the redirect settings of the domains this stack serves.
+type DomainConfig interface {
+	// Fallback returns the target for "/" and for unknown slugs on domain;
+	// known is false when the domain is not served by this stack.
+	Fallback(domain string) (url string, known bool)
 }
 
 // Handler serves every non-API route of the HTTP API.
 type Handler struct {
-	Store Store
-	// DefaultRedirectURL is the target for "/" and for unknown short paths.
-	DefaultRedirectURL string
+	Store   Store
+	Domains DomainConfig
 	// AdminOrigin is the only origin allowed by the CORS headers on /api paths.
 	AdminOrigin string
 	Now         func() time.Time
@@ -45,19 +52,27 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if path == "" {
 		path = "/"
 	}
-	slog.Info("Request received", "path", path)
+	host := requestDomain(req)
+	slog.Info("Request received", "domain", host, "path", path)
 
 	if strings.HasPrefix(path, "/api") {
 		return h.apiFallback(req), nil
 	}
 
-	target, known, err := h.resolve(ctx, path)
+	fallback, served := h.Domains.Fallback(host)
+	if !served {
+		slog.Info("Domain not served", "domain", host)
+		return notFound(), nil
+	}
+
+	slug := strings.Trim(path, "/")
+	target, hit, err := h.resolve(ctx, host, slug, fallback)
 	if err != nil {
 		slog.Error("Error processing request", "error", err.Error())
 		return unavailable(), nil
 	}
-	if known {
-		h.track(ctx, "/"+strings.Trim(path, "/"), target)
+	if hit {
+		h.track(ctx, host, slug, target)
 	}
 
 	return events.APIGatewayV2HTTPResponse{
@@ -87,37 +102,55 @@ func (h *Handler) apiFallback(req events.APIGatewayV2HTTPRequest) events.APIGate
 	}
 }
 
-// resolve returns the target for path; known is false when the default URL is used.
-func (h *Handler) resolve(ctx context.Context, path string) (target string, known bool, err error) {
-	shortPath := strings.Trim(path, "/")
-	if shortPath == "" {
-		return h.DefaultRedirectURL, false, nil
+// requestDomain returns the domain the request was sent to: the API Gateway
+// domain name, or the Host header when that is empty, normalised by
+// domain.FromHost. It is "" when neither is set.
+func requestDomain(req events.APIGatewayV2HTTPRequest) string {
+	if d := domain.FromHost(req.RequestContext.DomainName); d != "" {
+		return d
 	}
-	link, ok, err := h.Store.GetLink(ctx, shortPath)
+	for k, v := range req.Headers {
+		if strings.EqualFold(k, "host") {
+			return domain.FromHost(v)
+		}
+	}
+	return ""
+}
+
+// resolve returns the target for slug on host; hit is false when fallback is
+// used. An empty host or slug is never looked up.
+func (h *Handler) resolve(ctx context.Context, host, slug, fallback string) (target string, hit bool, err error) {
+	if host == "" || slug == "" {
+		return fallback, false, nil
+	}
+	link, ok, err := h.Store.GetLink(ctx, host, slug)
 	if err != nil {
 		return "", false, err
 	}
 	if ok {
-		slog.Info("Redirect hit", "short_path", shortPath, "target_url", link.TargetURL)
+		slog.Info("Redirect hit", "domain", host, "slug", slug, "target_url", link.TargetURL)
 		return link.TargetURL, true, nil
 	}
-	slog.Info("Redirect miss, using default", "short_path", shortPath, "target_url", h.DefaultRedirectURL)
-	return h.DefaultRedirectURL, false, nil
+	slog.Info("Redirect miss, using fallback", "domain", host, "slug", slug, "target_url", fallback)
+	return fallback, false, nil
 }
 
 // track records a click. A failure is logged and never fails the redirect.
-func (h *Handler) track(ctx context.Context, redirectPath, target string) {
+func (h *Handler) track(ctx context.Context, host, slug, target string) {
 	ts := store.Timestamp(h.Now())
-	err := h.Store.PutClick(ctx, store.Click{
-		RedirectPath: redirectPath,
-		Timestamp:    ts,
-		TargetURL:    &target,
-	})
-	if err != nil {
+	if err := h.Store.PutClick(ctx, store.NewClick(host, slug, ts, &target)); err != nil {
 		slog.Error("Failed to track redirect", "error", err.Error())
 		return
 	}
-	slog.Info("Tracked click", "path", redirectPath, "timestamp", ts)
+	slog.Info("Tracked click", "domain", host, "slug", slug, "timestamp", ts)
+}
+
+func notFound() events.APIGatewayV2HTTPResponse {
+	return events.APIGatewayV2HTTPResponse{
+		StatusCode: 404,
+		Headers:    map[string]string{"Content-Type": "text/plain"},
+		Body:       "Not found",
+	}
 }
 
 func unavailable() events.APIGatewayV2HTTPResponse {

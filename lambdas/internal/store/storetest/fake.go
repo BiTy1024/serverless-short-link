@@ -11,8 +11,9 @@ import (
 )
 
 // Fake keeps links in insertion order and clicks as appended. It mirrors the
-// DynamoDB semantics the handlers rely on: conditional create, update and
-// delete, and queries returning clicks oldest first.
+// DynamoDB semantics the handlers rely on: links keyed by (domain, slug),
+// conditional create, update and delete, and click queries returning clicks
+// oldest first.
 type Fake struct {
 	mu     sync.Mutex
 	links  []store.Link
@@ -20,15 +21,18 @@ type Fake struct {
 
 	// Errors makes the named method (e.g. "PutClick") fail with the given error.
 	Errors map[string]error
-	// LastRange is the range passed to the latest QueryClicks call.
+	// LastRange is the range passed to the latest click read.
 	LastRange store.TimeRange
-	// GetLinkCalls counts GetLink calls.
-	GetLinkCalls int
+	// LastDomain is the domain passed to the latest ListLinks, ListLinkKeys
+	// or QueryDomainClicks call.
+	LastDomain string
+	// Calls counts calls per method name.
+	Calls map[string]int
 }
 
 // NewFake returns a store holding links.
 func NewFake(links ...store.Link) *Fake {
-	return &Fake{links: slices.Clone(links)}
+	return &Fake{links: slices.Clone(links), Calls: map[string]int{}}
 }
 
 // Links returns a copy of the stored links.
@@ -38,66 +42,87 @@ func (f *Fake) Links() []store.Link {
 	return slices.Clone(f.links)
 }
 
-func (f *Fake) index(shortPath string) int {
-	return slices.IndexFunc(f.links, func(l store.Link) bool { return l.ShortPath == shortPath })
+// enter records a call to method and returns its configured error. The
+// caller holds f.mu.
+func (f *Fake) enter(method string) error {
+	if f.Calls == nil {
+		f.Calls = map[string]int{}
+	}
+	f.Calls[method]++
+	return f.Errors[method]
 }
 
-func (f *Fake) GetLink(_ context.Context, shortPath string) (store.Link, bool, error) {
+func (f *Fake) index(domain, slug string) int {
+	return slices.IndexFunc(f.links, func(l store.Link) bool { return l.Domain == domain && l.Slug == slug })
+}
+
+func (f *Fake) GetLink(_ context.Context, domain, slug string) (store.Link, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.GetLinkCalls++
-	if err := f.Errors["GetLink"]; err != nil {
+	if err := f.enter("GetLink"); err != nil {
 		return store.Link{}, false, err
 	}
-	i := f.index(shortPath)
+	i := f.index(domain, slug)
 	if i < 0 {
 		return store.Link{}, false, nil
 	}
 	return f.links[i], true, nil
 }
 
-func (f *Fake) ListLinks(context.Context) ([]store.Link, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.Errors["ListLinks"]; err != nil {
-		return nil, err
+func (f *Fake) linksOf(domain string) []store.Link {
+	out := []store.Link{}
+	for _, l := range f.links {
+		if domain == "" || l.Domain == domain {
+			out = append(out, l)
+		}
 	}
-	return slices.Clone(f.links), nil
+	return out
 }
 
-func (f *Fake) ListLinkPaths(context.Context) ([]string, error) {
+func (f *Fake) ListLinks(_ context.Context, domain string) ([]store.Link, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.Errors["ListLinkPaths"]; err != nil {
+	f.LastDomain = domain
+	if err := f.enter("ListLinks"); err != nil {
 		return nil, err
 	}
-	var paths []string
-	for _, l := range f.links {
-		paths = append(paths, l.ShortPath)
+	return f.linksOf(domain), nil
+}
+
+func (f *Fake) ListLinkKeys(_ context.Context, domain string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.LastDomain = domain
+	if err := f.enter("ListLinkKeys"); err != nil {
+		return nil, err
 	}
-	return paths, nil
+	var keys []string
+	for _, l := range f.linksOf(domain) {
+		keys = append(keys, store.LinkKey(l.Domain, l.Slug))
+	}
+	return keys, nil
 }
 
 func (f *Fake) CreateLink(_ context.Context, link store.Link) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.Errors["CreateLink"]; err != nil {
+	if err := f.enter("CreateLink"); err != nil {
 		return err
 	}
-	if f.index(link.ShortPath) >= 0 {
+	if f.index(link.Domain, link.Slug) >= 0 {
 		return store.ErrLinkExists
 	}
 	f.links = append(f.links, link)
 	return nil
 }
 
-func (f *Fake) UpdateLinkTarget(_ context.Context, shortPath, targetURL, updatedAt string) (store.Link, error) {
+func (f *Fake) UpdateLinkTarget(_ context.Context, domain, slug, targetURL, updatedAt string) (store.Link, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.Errors["UpdateLinkTarget"]; err != nil {
+	if err := f.enter("UpdateLinkTarget"); err != nil {
 		return store.Link{}, err
 	}
-	i := f.index(shortPath)
+	i := f.index(domain, slug)
 	if i < 0 {
 		return store.Link{}, store.ErrLinkNotFound
 	}
@@ -106,13 +131,13 @@ func (f *Fake) UpdateLinkTarget(_ context.Context, shortPath, targetURL, updated
 	return f.links[i], nil
 }
 
-func (f *Fake) DeleteLink(_ context.Context, shortPath string) error {
+func (f *Fake) DeleteLink(_ context.Context, domain, slug string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.Errors["DeleteLink"]; err != nil {
+	if err := f.enter("DeleteLink"); err != nil {
 		return err
 	}
-	i := f.index(shortPath)
+	i := f.index(domain, slug)
 	if i < 0 {
 		return store.ErrLinkNotFound
 	}
@@ -123,42 +148,56 @@ func (f *Fake) DeleteLink(_ context.Context, shortPath string) error {
 func (f *Fake) PutClick(_ context.Context, click store.Click) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.Errors["PutClick"]; err != nil {
+	if err := f.enter("PutClick"); err != nil {
 		return err
 	}
 	f.Clicks = append(f.Clicks, click)
 	return nil
 }
 
-func (f *Fake) ScanClicks(context.Context) ([]store.Click, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.Errors["ScanClicks"]; err != nil {
-		return nil, err
-	}
-	return slices.Clone(f.Clicks), nil
-}
-
-func (f *Fake) QueryClicks(_ context.Context, redirectPath string, r store.TimeRange) ([]store.Click, error) {
+// ScanClicks returns the clicks within r in insertion order, as a Scan with a
+// filter returns them unordered.
+func (f *Fake) ScanClicks(_ context.Context, r store.TimeRange) ([]store.Click, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.LastRange = r
-	if err := f.Errors["QueryClicks"]; err != nil {
+	if err := f.enter("ScanClicks"); err != nil {
 		return nil, err
 	}
+	return f.clicks(func(store.Click) bool { return true }, r, false), nil
+}
+
+func (f *Fake) QueryDomainClicks(_ context.Context, domain string, r store.TimeRange) ([]store.Click, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.LastRange = r
+	f.LastDomain = domain
+	if err := f.enter("QueryDomainClicks"); err != nil {
+		return nil, err
+	}
+	return f.clicks(func(c store.Click) bool { return c.Domain == domain }, r, true), nil
+}
+
+func (f *Fake) QueryLinkClicks(_ context.Context, domain, slug string, r store.TimeRange) ([]store.Click, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.LastRange = r
+	if err := f.enter("QueryLinkClicks"); err != nil {
+		return nil, err
+	}
+	key := store.LinkKey(domain, slug)
+	return f.clicks(func(c store.Click) bool { return c.LinkKey == key }, r, true), nil
+}
+
+func (f *Fake) clicks(match func(store.Click) bool, r store.TimeRange, sorted bool) []store.Click {
 	var out []store.Click
 	for _, c := range f.Clicks {
-		if c.RedirectPath != redirectPath {
-			continue
+		if match(c) && r.Contains(c.Timestamp) {
+			out = append(out, c)
 		}
-		if r.Start != "" && c.Timestamp < r.Start {
-			continue
-		}
-		if r.End != "" && c.Timestamp > r.End {
-			continue
-		}
-		out = append(out, c)
 	}
-	slices.SortStableFunc(out, func(a, b store.Click) int { return strings.Compare(a.Timestamp, b.Timestamp) })
-	return out, nil
+	if sorted {
+		slices.SortStableFunc(out, func(a, b store.Click) int { return strings.Compare(a.Timestamp, b.Timestamp) })
+	}
+	return out
 }
