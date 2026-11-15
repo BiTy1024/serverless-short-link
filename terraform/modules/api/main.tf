@@ -113,12 +113,12 @@ locals {
   links_routes = {
     list   = "GET /api/links"
     create = "POST /api/links"
-    update = "PUT /api/links/{path}"
-    delete = "DELETE /api/links/{path}"
+    update = "PUT /api/links/{domain}/{path}"
+    delete = "DELETE /api/links/{domain}/{path}"
   }
   stats_routes = {
     overview = "GET /api/stats"
-    detail   = "GET /api/stats/{path}"
+    detail   = "GET /api/stats/{domain}/{path}"
   }
   throttled_routes = merge(local.links_routes, local.stats_routes)
 }
