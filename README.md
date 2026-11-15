@@ -23,7 +23,7 @@ links at `<primary>`, the admin frontend at `admin.<primary>`. Any number of
 settings page. Each domain gets its DNS records either by hand at an external
 DNS host (`external`) or written to a Route 53 hosted zone (`route53`).
 
-**Prerequisites**: AWS CLI, Terraform >= 1.6, Go (version in `lambdas/go.mod`), make, Python 3 (`deploy.sh` reads Terraform outputs with it), Node.js
+**Prerequisites**: AWS CLI, Terraform >= 1.10, Go (version in `lambdas/go.mod`), make, Python 3 (`deploy.sh` reads Terraform outputs with it), Node.js
 
 ```bash
 # One-time: bootstrap the remote state backend (S3 + DynamoDB lock)

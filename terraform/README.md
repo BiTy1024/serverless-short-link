@@ -5,13 +5,13 @@ Provisions the whole stack: Lambdas, HTTP API, DynamoDB, Cognito, S3, CloudFront
 ## Prerequisites
 
 - Go and make, to build the Lambda binaries (`make -C lambdas build` from the repo root) before `plan`/`apply`
-- Terraform >= 1.6
+- Terraform >= 1.10
 - AWS CLI configured for the target account
 - In route53 mode: the Route 53 hosted zone of the primary domain. In external mode: access to the DNS host to set CNAME records by hand
 
 ## One-time: bootstrap remote state
 
-The root module uses an S3 backend with DynamoDB locking. Provision those once:
+The root module uses an S3 backend with S3 lock files (`use_lockfile`, Terraform >= 1.10). Provision the bucket once:
 
 ```bash
 cd terraform/bootstrap
@@ -52,7 +52,7 @@ Certificates of secondary domains are requested by the domains Lambda at runtime
 
 ```
 terraform/
-├── bootstrap/        # one-time: S3 state bucket + DynamoDB lock table
+├── bootstrap/        # one-time: S3 state bucket
 ├── modules/
 │   ├── data/         # DynamoDB tables
 │   ├── auth/         # Cognito pool + groups + client
