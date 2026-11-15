@@ -151,23 +151,21 @@ function DomainRecords({ d, polling }: { d: DomainSetting; polling: boolean }) {
               </span>
             )}
           </button>
-          {open && (
-            <div id={panelId} className="space-y-3">
-              <RecordTable
-                title="Certificate validation"
-                hint="Set these CNAME records at your DNS host and keep them, so the certificate can renew."
-                records={validationRecords}
-              />
-              <RecordTable
-                title={d.role === 'primary' ? 'Service records' : 'Domain record'}
-                hint="Point the domain at the service with these CNAME records. A domain apex cannot be a CNAME."
-                records={d.dns_records}
-              />
-              <p className="text-xs text-text-muted">
-                At Cloudflare and similar hosts, set each CNAME to "DNS only", not proxied.
-              </p>
-            </div>
-          )}
+          <div id={panelId} hidden={!open} className="space-y-3">
+            <RecordTable
+              title="Certificate validation"
+              hint="Set these CNAME records at your DNS host and keep them, so the certificate can renew."
+              records={validationRecords}
+            />
+            <RecordTable
+              title={d.role === 'primary' ? 'Service records' : 'Domain record'}
+              hint="Point the domain at the service with these CNAME records. A domain apex cannot be a CNAME."
+              records={d.dns_records}
+            />
+            <p className="text-xs text-text-muted">
+              At Cloudflare and similar hosts, set each CNAME to "DNS only", not proxied.
+            </p>
+          </div>
         </>
       )}
     </div>
@@ -327,7 +325,7 @@ function AddDomainForm({ zones, onAdded }: { zones: string[]; onAdded: () => voi
       </div>
       <p className="text-xs text-text-muted">
         The fallback URL is where the domain's root and unknown slugs redirect to. After adding, set the
-        certificate validation record shown below; the domain is checked every five minutes, or use "Check now".
+        certificate validation record shown under "DNS records" below; the domain is checked every five minutes, or use "Check now".
       </p>
       {error && <p className="text-xs text-red-600 break-words">{error}</p>}
     </div>
