@@ -17,8 +17,7 @@ module "lambda_redirect" {
 
   function_name = "${var.stack_name}-redirect"
   description   = "Handles URL redirects based on DynamoDB lookup"
-  source_dir    = "${path.module}/../src/redirect"
-  service_name  = "redirect"
+  binary_path   = "${path.module}/../lambdas/build/redirect/bootstrap"
 
   environment_variables = {
     LINKS_TABLE_NAME     = module.data.links_table_name
@@ -46,8 +45,7 @@ module "lambda_links" {
 
   function_name = "${var.stack_name}-links-api"
   description   = "CRUD API for managing short links"
-  source_dir    = "${path.module}/../src/links"
-  service_name  = "links"
+  binary_path   = "${path.module}/../lambdas/build/links/bootstrap"
 
   environment_variables = {
     LINKS_TABLE_NAME = module.data.links_table_name
@@ -73,8 +71,7 @@ module "lambda_stats" {
 
   function_name = "${var.stack_name}-stats-api"
   description   = "API for querying click statistics"
-  source_dir    = "${path.module}/../src/stats"
-  service_name  = "stats"
+  binary_path   = "${path.module}/../lambdas/build/stats/bootstrap"
 
   environment_variables = {
     STATS_TABLE_NAME = module.data.stats_table_name

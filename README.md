@@ -1,36 +1,21 @@
 # Serverless Short Link Service
 
-Serverless URL shortener with admin dashboard — create readable short links, control their targets, and track click analytics. Built with Python, React, and DynamoDB on AWS, deployable via **SAM or Terraform**.
+Serverless URL shortener with admin dashboard — create readable short links, control their targets, and track click analytics. Built with Go, React, and DynamoDB on AWS, deployed with **Terraform**.
 
 **Live demo**: [admin.short.bookpass.de](https://admin.short.bookpass.de)
 View-only login: `demo@short.bookpass.de` / `demo1234`
 
 ## Highlights
 
-- **Two equivalent IaC paths** — the full stack ships as both an AWS SAM template and a modular Terraform configuration; pick either, get identical infrastructure.
+- **Terraform IaC** — the full stack ships as a modular Terraform configuration; the CloudFront cert (us-east-1) and the API cert (regional) are provisioned natively via provider aliasing and DNS validation.
 - **Auth & roles** — Cognito JWT authorizer on the API, with `admin` (full CRUD) and `viewer` (read-only) groups.
 - **Public redirects, protected admin** — redirect routes are open; every `/api/*` route is authenticated, CORS-locked to the admin origin, and rate-limited per route.
 - **Private SPA hosting** — React dashboard served via CloudFront with Origin Access Control over a fully private S3 bucket.
 - **Click analytics** — every redirect is recorded to DynamoDB (non-blocking, so tracking never breaks a redirect).
-- **Structured logging** — all Lambdas use AWS Lambda Powertools for JSON logs.
-
-> Terraform note: the CloudFront cert (us-east-1) and API cert (regional) are both provisioned natively via provider aliasing + DNS validation — no custom-resource Lambda, unlike the SAM template.
+- **Go Lambdas** — one static arm64 binary per function on the `provided.al2023` runtime, with structured JSON logs via `log/slog`.
 
 
 ## Setup
-
-Pick one of two deployment paths. Both provision equivalent infrastructure.
-
-### Option A — SAM (default)
-
-```bash
-cp samconfig.example.toml samconfig.toml  # Fill in your values
-./deploy.sh                               # Deploys backend + frontend
-```
-
-**Prerequisites**: AWS CLI, SAM CLI, Python 3.12, Node.js
-
-### Option B — Terraform
 
 ```bash
 # One-time: bootstrap the remote state backend (S3 + DynamoDB lock)
@@ -40,12 +25,35 @@ terraform init && terraform apply -var "state_bucket_name=YOUR-UNIQUE-BUCKET"
 cd ../..
 
 cp terraform/envs/example.tfvars terraform/envs/myenv.tfvars  # fill in values
-./deploy.sh --iac=terraform --config=terraform/envs/myenv.tfvars
+./deploy.sh --config=terraform/envs/myenv.tfvars
 ```
 
-**Prerequisites**: AWS CLI, Terraform >= 1.6, Python 3.12, Node.js
+`deploy.sh` builds the Lambda binaries (`make -C lambdas build`), runs `terraform apply`, then builds the admin frontend and uploads it to S3.
 
-See [`terraform/README.md`](terraform/README.md) for the resource layout and trade-offs vs. SAM.
+**Prerequisites**: AWS CLI, Terraform >= 1.6, Go (version in `lambdas/go.mod`), make, Python 3 (`deploy.sh` reads Terraform outputs with it), Node.js
+
+### Adding users
+
+```bash
+python3 add_user.py --user-pool-id "$(cd terraform && terraform output -raw user_pool_id)" \
+  --email user@example.com --password '...' --group admin   # or viewer
+```
+
+## Development
+
+The Lambdas live in `lambdas/`: one entry point per function in `cmd/<name>`, shared code in `internal/`.
+
+```bash
+cd lambdas
+make test        # go test ./...
+make vet         # go vet ./...
+make fmt-check   # gofmt
+make build       # linux/arm64 binaries in build/<name>/bootstrap
+```
+
+Terraform zips `lambdas/build/<name>/bootstrap`, so run `make build` before any `terraform plan` or `apply` you run by hand.
+
+See [`terraform/README.md`](terraform/README.md) for the resource layout.
 
 ## API
 

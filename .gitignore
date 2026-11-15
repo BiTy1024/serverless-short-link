@@ -5,11 +5,9 @@ issues/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
-*.samconfig.toml
 
-.aws-sam
-samconfig.toml
-/samconfig.toml
+# Go Lambda binaries and their zips
+lambdas/build/
 
 # Terraform
 # (commit .terraform.lock.hcl for reproducible provider versions)
@@ -232,3 +230,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .DS_Store
+
+# Go package named env, matched by the env/ rule above
+!lambdas/internal/env/
