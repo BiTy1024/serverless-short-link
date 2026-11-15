@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store/storetest"
 )
@@ -15,6 +16,7 @@ import (
 const (
 	defaultURL  = "https://example.com/home"
 	adminOrigin = "https://admin.short.example"
+	host        = "go.example.com"
 )
 
 var fixedNow = time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
@@ -22,23 +24,30 @@ var fixedNow = time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
 func newHandler(s Store) *Handler {
 	return &Handler{
 		Store:              s,
+		Domains:            domain.Static{FallbackURL: defaultURL},
 		DefaultRedirectURL: defaultURL,
 		AdminOrigin:        adminOrigin,
 		Now:                func() time.Time { return fixedNow },
 	}
 }
 
+// request builds a request to host, given as the API Gateway domain name.
 func request(method, path string) events.APIGatewayV2HTTPRequest {
 	var req events.APIGatewayV2HTTPRequest
 	req.RawPath = path
 	req.RequestContext.HTTP.Method = method
+	req.RequestContext.DomainName = host
 	return req
+}
+
+func promo(domain string) store.Link {
+	return store.Link{Domain: domain, Slug: "promo", TargetURL: "https://" + domain + "/target"}
 }
 
 func TestRedirectHit(t *testing.T) {
 	for _, path := range []string{"/promo", "/promo/", "//promo//"} {
 		t.Run(path, func(t *testing.T) {
-			fake := storetest.NewFake(store.Link{ShortPath: "promo", TargetURL: "https://example.com/promo"})
+			fake := storetest.NewFake(promo(host))
 			resp, err := newHandler(fake).Handle(context.Background(), request("GET", path))
 			if err != nil {
 				t.Fatal(err)
@@ -46,7 +55,7 @@ func TestRedirectHit(t *testing.T) {
 			if resp.StatusCode != 301 {
 				t.Fatalf("status = %d, want 301", resp.StatusCode)
 			}
-			if got := resp.Headers["Location"]; got != "https://example.com/promo" {
+			if got := resp.Headers["Location"]; got != "https://go.example.com/target" {
 				t.Errorf("Location = %q", got)
 			}
 			if len(resp.Headers) != 1 || resp.Body != "" {
@@ -56,8 +65,9 @@ func TestRedirectHit(t *testing.T) {
 				t.Fatalf("clicks = %d, want 1", len(fake.Clicks))
 			}
 			c := fake.Clicks[0]
-			if c.RedirectPath != "/promo" || c.Timestamp != "2026-03-04T05:06:07.123456+00:00" ||
-				c.TargetURL == nil || *c.TargetURL != "https://example.com/promo" {
+			if c.LinkKey != "go.example.com#promo" || c.Domain != host || c.Slug != "promo" ||
+				c.Timestamp != "2026-03-04T05:06:07.123456+00:00" ||
+				c.TargetURL == nil || *c.TargetURL != "https://go.example.com/target" {
 				t.Errorf("click = %+v", c)
 			}
 		})
@@ -82,17 +92,17 @@ func TestRedirectRootUsesDefaultWithoutLookup(t *testing.T) {
 		if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
 			t.Errorf("%q: got %d %v", path, resp.StatusCode, resp.Headers)
 		}
-		if fake.GetLinkCalls != 0 || len(fake.Clicks) != 0 {
-			t.Errorf("%q: lookups=%d clicks=%d", path, fake.GetLinkCalls, len(fake.Clicks))
+		if fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
+			t.Errorf("%q: lookups=%d clicks=%d", path, fake.Calls["GetLink"], len(fake.Clicks))
 		}
 	}
 }
 
 func TestRedirectTrackingFailureStillRedirects(t *testing.T) {
-	fake := storetest.NewFake(store.Link{ShortPath: "promo", TargetURL: "https://example.com/promo"})
+	fake := storetest.NewFake(promo(host))
 	fake.Errors = map[string]error{"PutClick": errors.New("boom")}
 	resp, _ := newHandler(fake).Handle(context.Background(), request("GET", "/promo"))
-	if resp.StatusCode != 301 || resp.Headers["Location"] != "https://example.com/promo" {
+	if resp.StatusCode != 301 || resp.Headers["Location"] != "https://go.example.com/target" {
 		t.Fatalf("got %d %v", resp.StatusCode, resp.Headers)
 	}
 }
@@ -122,7 +132,7 @@ func TestAPIPaths(t *testing.T) {
 			t.Fatalf("got %d %q", resp.StatusCode, resp.Body)
 		}
 		assertHeaders(t, resp.Headers, cors)
-		if fake.GetLinkCalls != 0 {
+		if fake.Calls["GetLink"] != 0 {
 			t.Error("api path was looked up")
 		}
 	})
@@ -150,5 +160,123 @@ func assertHeaders(t *testing.T, got, want map[string]string) {
 		if got[k] != v {
 			t.Errorf("header %s = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+func TestRedirectResolvesDomainFromHost(t *testing.T) {
+	tests := []struct {
+		name       string
+		domainName string
+		headers    map[string]string
+		want       string
+	}{
+		{"domain name", "go.example.com", nil, "go.example.com"},
+		{"domain name uppercase", "GO.Example.COM", nil, "go.example.com"},
+		{"domain name wins over host", "go.example.com", map[string]string{"host": "other.example"}, "go.example.com"},
+		{"host header", "", map[string]string{"host": "go.example.com"}, "go.example.com"},
+		{"host header with port", "", map[string]string{"host": "go.example.com:443"}, "go.example.com"},
+		{"host header uppercase with port", "", map[string]string{"Host": "GO.EXAMPLE.COM:8443"}, "go.example.com"},
+		{"host header trailing dot", "", map[string]string{"host": "go.example.com."}, "go.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := storetest.NewFake(promo("go.example.com"), promo("other.example"))
+			req := request("GET", "/promo")
+			req.RequestContext.DomainName = tt.domainName
+			req.Headers = tt.headers
+			resp, _ := newHandler(fake).Handle(context.Background(), req)
+			if want := "https://" + tt.want + "/target"; resp.StatusCode != 301 || resp.Headers["Location"] != want {
+				t.Fatalf("got %d %v, want 301 to %s", resp.StatusCode, resp.Headers, want)
+			}
+			if len(fake.Clicks) != 1 || fake.Clicks[0].Domain != tt.want {
+				t.Errorf("clicks = %+v", fake.Clicks)
+			}
+		})
+	}
+}
+
+// noDomains reports every domain as unknown and counts its calls.
+type noDomains struct{ calls *int }
+
+func (n noDomains) Fallback(string) (string, bool) {
+	*n.calls++
+	return "", false
+}
+
+func TestRedirectMissingHostUsesFallbackWithoutLookup(t *testing.T) {
+	for _, hostHeader := range []string{"", "  ", ":443"} {
+		fake := storetest.NewFake(promo(host))
+		var configCalls int
+		h := newHandler(fake)
+		h.Domains = noDomains{calls: &configCalls}
+		req := request("GET", "/promo")
+		req.RequestContext.DomainName = ""
+		req.Headers = map[string]string{"host": hostHeader}
+		resp, _ := h.Handle(context.Background(), req)
+		if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
+			t.Fatalf("host %q: got %d %v", hostHeader, resp.StatusCode, resp.Headers)
+		}
+		if configCalls != 0 || fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
+			t.Errorf("host %q: config calls=%d lookups=%d clicks=%d", hostHeader, configCalls, fake.Calls["GetLink"], len(fake.Clicks))
+		}
+	}
+}
+
+func TestRedirectSameSlugOnTwoDomains(t *testing.T) {
+	fake := storetest.NewFake(promo("a.example"), promo("b.example"))
+	for _, d := range []string{"a.example", "b.example"} {
+		req := request("GET", "/promo")
+		req.RequestContext.DomainName = d
+		resp, _ := newHandler(fake).Handle(context.Background(), req)
+		if want := "https://" + d + "/target"; resp.Headers["Location"] != want {
+			t.Errorf("%s: Location = %q, want %q", d, resp.Headers["Location"], want)
+		}
+	}
+	if len(fake.Clicks) != 2 || fake.Clicks[0].LinkKey != "a.example#promo" || fake.Clicks[1].LinkKey != "b.example#promo" {
+		t.Errorf("clicks = %+v", fake.Clicks)
+	}
+
+	// A slug that exists only on another domain is a miss.
+	req := request("GET", "/promo")
+	req.RequestContext.DomainName = "c.example"
+	resp, _ := newHandler(fake).Handle(context.Background(), req)
+	if resp.Headers["Location"] != defaultURL || len(fake.Clicks) != 2 {
+		t.Errorf("c.example: Location = %q, clicks = %d", resp.Headers["Location"], len(fake.Clicks))
+	}
+}
+
+// onlyDomain serves one domain and reports every other as unknown.
+type onlyDomain struct{ name, url string }
+
+func (o onlyDomain) Fallback(d string) (string, bool) {
+	if d == o.name {
+		return o.url, true
+	}
+	return "", false
+}
+
+func TestRedirectUsesFallbackOfTheDomain(t *testing.T) {
+	h := newHandler(storetest.NewFake())
+	h.Domains = onlyDomain{name: host, url: "https://go.example.com/landing"}
+	for _, path := range []string{"/", "/unknown"} {
+		resp, _ := h.Handle(context.Background(), request("GET", path))
+		if resp.StatusCode != 301 || resp.Headers["Location"] != "https://go.example.com/landing" {
+			t.Errorf("%s: got %d %v", path, resp.StatusCode, resp.Headers)
+		}
+	}
+}
+
+func TestRedirectUnknownDomainIs404WithoutLookup(t *testing.T) {
+	fake := storetest.NewFake(promo("other.example"))
+	h := newHandler(fake)
+	h.Domains = onlyDomain{name: host, url: defaultURL}
+	req := request("GET", "/promo")
+	req.RequestContext.DomainName = "other.example"
+	resp, _ := h.Handle(context.Background(), req)
+	if resp.StatusCode != 404 || resp.Body != "Not found" || resp.Headers["Content-Type"] != "text/plain" {
+		t.Fatalf("got %d %v %q", resp.StatusCode, resp.Headers, resp.Body)
+	}
+	if fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
+		t.Errorf("lookups=%d clicks=%d", fake.Calls["GetLink"], len(fake.Clicks))
 	}
 }

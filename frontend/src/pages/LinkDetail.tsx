@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { api, type StatsDetail } from '../api/client'
+import { api, shortUrl, type StatsDetail } from '../api/client'
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -22,19 +22,19 @@ function aggregateByDate(clicks: Array<{ timestamp: string }>) {
 }
 
 export default function LinkDetail() {
-  const { path } = useParams<{ path: string }>()
+  const { domain, slug } = useParams<{ domain: string; slug: string }>()
   const [stats, setStats] = useState<StatsDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [range, setRange] = useState<number | undefined>(30)
 
   useEffect(() => {
-    if (!path) return
+    if (!domain || !slug) return
     setLoading(true)
     api
-      .getStatsByPath(path, range ? { days: range } : undefined)
+      .getLinkStats(domain, slug, range ? { days: range } : undefined)
       .then(setStats)
       .finally(() => setLoading(false))
-  }, [path, range])
+  }, [domain, slug, range])
 
   if (loading) return <p className="text-text-muted text-sm">Loading...</p>
   if (!stats) return <p className="text-text-muted text-sm">Failed to load stats.</p>
@@ -50,7 +50,7 @@ export default function LinkDetail() {
       </div>
 
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-text font-mono">/{path}</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-text font-mono">{shortUrl(stats.domain, stats.slug)}</h1>
         {stats.target_url && (
           <p className="text-sm text-text-muted mt-1 truncate">{stats.target_url}</p>
         )}

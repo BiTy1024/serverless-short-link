@@ -35,7 +35,7 @@ export default function App() {
       >
         <Route path="/" element={<Dashboard />} />
         <Route path="/links" element={<Links />} />
-        <Route path="/links/:path" element={<LinkDetail />} />
+        <Route path="/links/:domain/:slug" element={<LinkDetail />} />
       </Route>
     </Routes>
   )

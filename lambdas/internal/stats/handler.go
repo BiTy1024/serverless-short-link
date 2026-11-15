@@ -1,4 +1,5 @@
-// Package stats serves click statistics under /api/stats.
+// Package stats serves click statistics under /api/stats, across all domains
+// or for one domain.
 package stats
 
 import (
@@ -14,14 +15,17 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/apigw"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/linkslug"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 )
 
 // Store is the data access the stats handler needs.
 type Store interface {
-	ScanClicks(ctx context.Context) ([]store.Click, error)
-	QueryClicks(ctx context.Context, redirectPath string, r store.TimeRange) ([]store.Click, error)
-	ListLinkPaths(ctx context.Context) ([]string, error)
+	ScanClicks(ctx context.Context, r store.TimeRange) ([]store.Click, error)
+	QueryDomainClicks(ctx context.Context, domain string, r store.TimeRange) ([]store.Click, error)
+	QueryLinkClicks(ctx context.Context, domain, slug string, r store.TimeRange) ([]store.Click, error)
+	ListLinkKeys(ctx context.Context, domain string) ([]string, error)
 }
 
 // Handler serves the /api/stats routes.
@@ -32,7 +36,7 @@ type Handler struct {
 
 const (
 	routeOverview = "GET /api/stats"
-	routeDetail   = "GET /api/stats/{path}"
+	routeDetail   = "GET /api/stats/{domain}/{path}"
 
 	recentClicksLimit = 20
 	// maxDays is the largest day count a time filter accepts before the
@@ -74,8 +78,9 @@ func (h *Handler) run(ctx context.Context, req events.APIGatewayV2HTTPRequest, r
 	return resp
 }
 
-type pathStats struct {
-	Path       string  `json:"path"`
+type linkStats struct {
+	Domain     string  `json:"domain"`
+	Slug       string  `json:"slug"`
 	Clicks     int     `json:"clicks"`
 	TargetURL  *string `json:"target_url"`
 	FirstClick string  `json:"first_click"`
@@ -83,42 +88,64 @@ type pathStats struct {
 }
 
 type overviewResponse struct {
-	Stats       []*pathStats `json:"stats"`
+	Stats       []*linkStats `json:"stats"`
 	TotalClicks int          `json:"total_clicks"`
 }
 
-// overview aggregates every click per redirect path, most clicked first.
-// Paths with equal counts keep the order in which they were first seen.
-// With linked_only=true, paths without a link are left out.
-func (h *Handler) overview(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	linkedOnly := strings.ToLower(req.QueryStringParameters["linked_only"]) == "true"
+const msgInvalidFilter = "Invalid time filter. Use days=N or from=YYYY-MM-DD&to=YYYY-MM-DD"
 
-	clicks, err := h.Store.ScanClicks(ctx)
+// overview aggregates the clicks in range per link, most clicked first.
+// Links with equal counts keep the order in which they were first seen.
+// With ?domain= it reads one domain through the by-domain index; without it
+// it scans the clicks of every domain. With linked_only=true, clicks of
+// links that no longer exist are left out.
+func (h *Handler) overview(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	q := req.QueryStringParameters
+	linkedOnly := strings.ToLower(q["linked_only"]) == "true"
+
+	name, err := domain.ParseOptional(q["domain"])
+	if err != nil {
+		return apigw.Error(400, err.Error()), nil
+	}
+	r, err := h.timeRange(q)
+	if errors.Is(err, errInvalidFilter) {
+		return apigw.Error(400, msgInvalidFilter), nil
+	}
+	if err != nil {
+		return events.APIGatewayV2HTTPResponse{}, err
+	}
+
+	var clicks []store.Click
+	if name != "" {
+		clicks, err = h.Store.QueryDomainClicks(ctx, name, r)
+	} else {
+		clicks, err = h.Store.ScanClicks(ctx, r)
+	}
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
 	var known map[string]bool
 	if linkedOnly {
-		paths, err := h.Store.ListLinkPaths(ctx)
+		keys, err := h.Store.ListLinkKeys(ctx, name)
 		if err != nil {
 			return events.APIGatewayV2HTTPResponse{}, err
 		}
-		known = make(map[string]bool, len(paths))
-		for _, p := range paths {
-			known["/"+p] = true
+		known = make(map[string]bool, len(keys))
+		for _, k := range keys {
+			known[k] = true
 		}
 	}
 
-	byPath := map[string]*pathStats{}
-	result := []*pathStats{}
+	byKey := map[string]*linkStats{}
+	result := []*linkStats{}
 	for _, c := range clicks {
-		if known != nil && !known[c.RedirectPath] {
+		if known != nil && !known[c.LinkKey] {
 			continue
 		}
-		s, ok := byPath[c.RedirectPath]
+		s, ok := byKey[c.LinkKey]
 		if !ok {
-			s = &pathStats{Path: c.RedirectPath, FirstClick: c.Timestamp, LastClick: c.Timestamp}
-			byPath[c.RedirectPath] = s
+			s = &linkStats{Domain: c.Domain, Slug: c.Slug, FirstClick: c.Timestamp, LastClick: c.Timestamp}
+			byKey[c.LinkKey] = s
 			result = append(result, s)
 		}
 		s.Clicks++
@@ -131,7 +158,7 @@ func (h *Handler) overview(ctx context.Context, req events.APIGatewayV2HTTPReque
 		}
 	}
 
-	slices.SortStableFunc(result, func(a, b *pathStats) int { return b.Clicks - a.Clicks })
+	slices.SortStableFunc(result, func(a, b *linkStats) int { return b.Clicks - a.Clicks })
 	total := 0
 	for _, s := range result {
 		total += s.Clicks
@@ -144,26 +171,34 @@ type recentClick struct {
 }
 
 type detailResponse struct {
-	Path         string        `json:"path"`
+	Domain       string        `json:"domain"`
+	Slug         string        `json:"slug"`
 	Clicks       int           `json:"clicks"`
 	TargetURL    *string       `json:"target_url"`
 	RecentClicks []recentClick `json:"recent_clicks"`
 }
 
-// detail returns the click count of one path, its 20 most recent clicks and
+// detail returns the click count of one link, its 20 most recent clicks and
 // the target URL recorded on the oldest click in range.
 func (h *Handler) detail(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	path := "/" + req.PathParameters["path"]
+	name, err := domain.Parse(req.PathParameters["domain"])
+	if err != nil {
+		return apigw.Error(400, err.Error()), nil
+	}
+	slug := apigw.TrimSpace(req.PathParameters["path"])
+	if msg := linkslug.Validate(slug); msg != "" {
+		return apigw.Error(400, msg), nil
+	}
 
 	r, err := h.timeRange(req.QueryStringParameters)
 	if errors.Is(err, errInvalidFilter) {
-		return apigw.Error(400, "Invalid time filter. Use days=N or from=YYYY-MM-DD&to=YYYY-MM-DD"), nil
+		return apigw.Error(400, msgInvalidFilter), nil
 	}
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
 
-	clicks, err := h.Store.QueryClicks(ctx, path, r)
+	clicks, err := h.Store.QueryLinkClicks(ctx, name, slug, r)
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
@@ -181,7 +216,8 @@ func (h *Handler) detail(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	}
 
 	return apigw.JSON(200, detailResponse{
-		Path:         path,
+		Domain:       name,
+		Slug:         slug,
 		Clicks:       len(clicks),
 		TargetURL:    target,
 		RecentClicks: recent,

@@ -1,4 +1,5 @@
-// Package links serves the CRUD API for short links under /api/links.
+// Package links serves the CRUD API for short links under /api/links. A link
+// is addressed by its domain and slug.
 package links
 
 import (
@@ -7,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -17,15 +17,17 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/apigw"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/linkslug"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 )
 
 // Store is the data access the links handler needs.
 type Store interface {
-	ListLinks(ctx context.Context) ([]store.Link, error)
+	ListLinks(ctx context.Context, domain string) ([]store.Link, error)
 	CreateLink(ctx context.Context, link store.Link) error
-	UpdateLinkTarget(ctx context.Context, shortPath, targetURL, updatedAt string) (store.Link, error)
-	DeleteLink(ctx context.Context, shortPath string) error
+	UpdateLinkTarget(ctx context.Context, domain, slug, targetURL, updatedAt string) (store.Link, error)
+	DeleteLink(ctx context.Context, domain, slug string) error
 }
 
 // Handler serves the /api/links routes.
@@ -37,18 +39,12 @@ type Handler struct {
 const (
 	routeList   = "GET /api/links"
 	routeCreate = "POST /api/links"
-	routeUpdate = "PUT /api/links/{path}"
-	routeDelete = "DELETE /api/links/{path}"
+	routeUpdate = "PUT /api/links/{domain}/{path}"
+	routeDelete = "DELETE /api/links/{domain}/{path}"
 
-	adminGroup    = "admin"
-	maxPathLength = 64
+	adminGroup = "admin"
 	// minURLLength is the length of the shortest accepted URL, "https://x.xx".
 	minURLLength = len("https://x.xx")
-)
-
-var (
-	pathPattern   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
-	reservedPaths = []string{"api", "admin", "health", "status"}
 )
 
 type routeFunc func(h *Handler, ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error)
@@ -115,22 +111,6 @@ func userGroups(req events.APIGatewayV2HTTPRequest) []string {
 	})
 }
 
-func validatePath(path string) string {
-	switch {
-	case path == "":
-		return "Path is required"
-	case slices.Contains(reservedPaths, path):
-		return fmt.Sprintf("Path '%s' is reserved and cannot be used as a short link", path)
-	case utf8.RuneCountInString(path) > maxPathLength:
-		return fmt.Sprintf("Path must be at most %d characters", maxPathLength)
-	case strings.Contains(path, "--"):
-		return "Path must not contain consecutive hyphens"
-	case !pathPattern.MatchString(path):
-		return "Path must contain only lowercase letters, numbers, and hyphens. Must start and end with a letter or number."
-	}
-	return ""
-}
-
 func validateURL(url string) string {
 	switch {
 	case url == "":
@@ -182,8 +162,14 @@ type listResponse struct {
 	Count int          `json:"count"`
 }
 
-func (h *Handler) list(ctx context.Context, _ events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	links, err := h.Store.ListLinks(ctx)
+// list returns the links of the domain given as ?domain=, or of every domain
+// when the parameter is absent or empty.
+func (h *Handler) list(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	name, err := domain.ParseOptional(req.QueryStringParameters["domain"])
+	if err != nil {
+		return apigw.Error(400, err.Error()), nil
+	}
+	links, err := h.Store.ListLinks(ctx, name)
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
@@ -201,7 +187,11 @@ func (h *Handler) create(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
-	shortPath, err := body.field("short_path")
+	rawDomain, err := body.field("domain")
+	if err != nil {
+		return events.APIGatewayV2HTTPResponse{}, err
+	}
+	slug, err := body.field("slug")
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
@@ -210,7 +200,11 @@ func (h *Handler) create(ctx context.Context, req events.APIGatewayV2HTTPRequest
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
 
-	if msg := validatePath(shortPath); msg != "" {
+	name, err := domain.Parse(rawDomain)
+	if err != nil {
+		return apigw.Error(400, err.Error()), nil
+	}
+	if msg := linkslug.Validate(slug); msg != "" {
 		return apigw.Error(400, msg), nil
 	}
 	if msg := validateURL(targetURL); msg != "" {
@@ -218,21 +212,28 @@ func (h *Handler) create(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	}
 
 	now := store.Timestamp(h.Now())
-	link := store.Link{ShortPath: shortPath, TargetURL: targetURL, CreatedAt: now, UpdatedAt: now}
+	link := store.Link{Domain: name, Slug: slug, TargetURL: targetURL, CreatedAt: now, UpdatedAt: now}
 	err = h.Store.CreateLink(ctx, link)
 	if errors.Is(err, store.ErrLinkExists) {
-		return apigw.Error(409, fmt.Sprintf("Path '%s' already exists", shortPath)), nil
+		return apigw.Error(409, fmt.Sprintf("Slug '%s' already exists on %s", slug, name)), nil
 	}
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
 
-	slog.Info("Created link", "short_path", shortPath, "target_url", targetURL)
+	slog.Info("Created link", "domain", name, "slug", slug, "target_url", targetURL)
 	return apigw.JSON(201, link), nil
 }
 
 func (h *Handler) update(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	shortPath := req.PathParameters["path"]
+	name, err := domain.Parse(req.PathParameters["domain"])
+	if err != nil {
+		return apigw.Error(400, err.Error()), nil
+	}
+	slug := apigw.TrimSpace(req.PathParameters["path"])
+	if msg := linkslug.Validate(slug); msg != "" {
+		return apigw.Error(400, msg), nil
+	}
 
 	body, err := parseBody(req.Body)
 	if errors.Is(err, errInvalidJSON) {
@@ -249,29 +250,40 @@ func (h *Handler) update(ctx context.Context, req events.APIGatewayV2HTTPRequest
 		return apigw.Error(400, msg), nil
 	}
 
-	link, err := h.Store.UpdateLinkTarget(ctx, shortPath, targetURL, store.Timestamp(h.Now()))
+	link, err := h.Store.UpdateLinkTarget(ctx, name, slug, targetURL, store.Timestamp(h.Now()))
 	if errors.Is(err, store.ErrLinkNotFound) {
-		return apigw.Error(404, fmt.Sprintf("Path '%s' not found", shortPath)), nil
+		return notFound(name, slug), nil
 	}
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
 
-	slog.Info("Updated link", "short_path", shortPath, "target_url", targetURL)
+	slog.Info("Updated link", "domain", name, "slug", slug, "target_url", targetURL)
 	return apigw.JSON(200, link), nil
 }
 
 func (h *Handler) delete(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	shortPath := req.PathParameters["path"]
+	name, err := domain.Parse(req.PathParameters["domain"])
+	if err != nil {
+		return apigw.Error(400, err.Error()), nil
+	}
+	slug := apigw.TrimSpace(req.PathParameters["path"])
+	if msg := linkslug.Validate(slug); msg != "" {
+		return apigw.Error(400, msg), nil
+	}
 
-	err := h.Store.DeleteLink(ctx, shortPath)
+	err = h.Store.DeleteLink(ctx, name, slug)
 	if errors.Is(err, store.ErrLinkNotFound) {
-		return apigw.Error(404, fmt.Sprintf("Path '%s' not found", shortPath)), nil
+		return notFound(name, slug), nil
 	}
 	if err != nil {
 		return events.APIGatewayV2HTTPResponse{}, err
 	}
 
-	slog.Info("Deleted link", "short_path", shortPath)
+	slog.Info("Deleted link", "domain", name, "slug", slug)
 	return apigw.JSON(204, nil), nil
+}
+
+func notFound(name, slug string) events.APIGatewayV2HTTPResponse {
+	return apigw.Error(404, fmt.Sprintf("Slug '%s' not found on %s", slug, name))
 }

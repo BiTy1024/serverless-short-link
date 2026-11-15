@@ -9,17 +9,23 @@ locally over stdio.
 
 | Tool | API call | Notes |
 |---|---|---|
-| `list_links` | `GET /api/links` | substring filter `contains`, paging with `limit`/`offset` (applied client-side) |
-| `get_link` | `GET /api/links` | the API has no single-link endpoint; picks the slug from the list |
-| `create_link` | `POST /api/links` | `admin` only; 409 if the slug exists |
-| `update_link` | `PUT /api/links/{slug}` | `admin` only; replaces the target URL |
-| `delete_link` | `DELETE /api/links/{slug}` | `admin` only; marked destructive; click stats are kept |
-| `get_stats_overview` | `GET /api/stats` | `linked_only` defaults to `true`, as in the admin frontend |
-| `get_link_stats` | `GET /api/stats/{slug}` | optional `days`, or `from`/`to` as `YYYY-MM-DD` |
+| `list_links` | `GET /api/links[?domain=]` | optional `domain` filter; substring filter `contains`, paging with `limit`/`offset` (applied client-side) |
+| `get_link` | `GET /api/links?domain=` | the API has no single-link endpoint; picks the slug from the domain's list |
+| `create_link` | `POST /api/links` | `admin` only; `domain` required; 409 if the slug exists on that domain |
+| `update_link` | `PUT /api/links/{domain}/{slug}` | `admin` only; replaces the target URL |
+| `delete_link` | `DELETE /api/links/{domain}/{slug}` | `admin` only; marked destructive; click stats are kept |
+| `get_stats_overview` | `GET /api/stats[?domain=]` | optional `domain` filter; `linked_only` defaults to `true`, as in the admin frontend |
+| `get_link_stats` | `GET /api/stats/{domain}/{slug}` | optional `days`, or `from`/`to` as `YYYY-MM-DD` |
 
-Slug input is validated with the API's own rules before any request: 1–64
+A link is addressed by domain and slug: slugs are unique per domain, so the
+same slug can exist on several domains. Every tool that works on one link
+takes both.
+
+Input is validated with the API's own rules before any request. Slugs are 1–64
 characters of `a-z`, `0-9` and single hyphens, starting and ending with a
-letter or digit, and not one of `api`, `admin`, `health`, `status`.
+letter or digit, and not one of `api`, `admin`, `health`, `status`. Domains
+are lowercased and must be hostnames of at least two labels, without scheme,
+port or path.
 
 ## Authentication
 

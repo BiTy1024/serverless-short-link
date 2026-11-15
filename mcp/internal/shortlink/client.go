@@ -20,38 +20,80 @@ import (
 	"time"
 )
 
-// Slug rules mirror the validation in the links Lambda.
+// Slug and domain rules mirror the validation in the links Lambda.
 const (
-	// SlugPattern is the regular expression a short path must match.
+	// SlugPattern is the regular expression a slug must match.
 	SlugPattern = `^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`
-	// MaxSlugLength is the maximum length of a short path.
+	// MaxSlugLength is the maximum length of a slug.
 	MaxSlugLength = 64
+	// DomainPattern is a coarse shape check for a domain in either case; it
+	// fits JSON Schema, which has no case-insensitive flag. ValidateDomain
+	// applies the exact rules.
+	DomainPattern = `^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`
+	// MaxDomainLength is the maximum length of a domain.
+	MaxDomainLength = 253
 )
 
-// ReservedSlugs cannot be used as short paths.
+// ReservedSlugs cannot be used as slugs.
 var ReservedSlugs = []string{"api", "admin", "health", "status"}
 
-var slugRE = regexp.MustCompile(SlugPattern)
+var (
+	slugRE  = regexp.MustCompile(SlugPattern)
+	labelRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+)
+
+// NormalizeDomain returns domain in the form the API stores it: trimmed and
+// lowercased.
+func NormalizeDomain(domain string) string {
+	return strings.ToLower(strings.TrimSpace(domain))
+}
+
+// ValidateDomain applies the API's hostname rules to a normalised domain:
+// at least two dot-separated labels of letters, digits and inner hyphens, at
+// most 63 characters per label and 253 in total, and a last label that
+// contains a letter (so IP addresses are rejected).
+func ValidateDomain(domain string) error {
+	if domain == "" {
+		return errors.New("domain is required")
+	}
+	invalid := fmt.Errorf("domain %q is not a valid hostname, e.g. go.example.com", domain)
+	if len(domain) > MaxDomainLength {
+		return invalid
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return invalid
+	}
+	for _, l := range labels {
+		if !labelRE.MatchString(l) {
+			return invalid
+		}
+	}
+	if !strings.ContainsAny(labels[len(labels)-1], "abcdefghijklmnopqrstuvwxyz") {
+		return invalid
+	}
+	return nil
+}
 
 // ValidateSlug applies the same rules as the API and returns the API's
 // wording on failure, so a bad slug is rejected before any request is sent.
 func ValidateSlug(slug string) error {
 	if slug == "" {
-		return errors.New("path is required")
+		return errors.New("slug is required")
 	}
 	for _, r := range ReservedSlugs {
 		if slug == r {
-			return fmt.Errorf("path %q is reserved and cannot be used as a short link", slug)
+			return fmt.Errorf("slug %q is reserved and cannot be used as a short link", slug)
 		}
 	}
 	if len(slug) > MaxSlugLength {
-		return fmt.Errorf("path must be at most %d characters", MaxSlugLength)
+		return fmt.Errorf("slug must be at most %d characters", MaxSlugLength)
 	}
 	if strings.Contains(slug, "--") {
-		return errors.New("path must not contain consecutive hyphens")
+		return errors.New("slug must not contain consecutive hyphens")
 	}
 	if !slugRE.MatchString(slug) {
-		return errors.New("path must contain only lowercase letters, numbers, and hyphens, and must start and end with a letter or number")
+		return errors.New("slug must contain only lowercase letters, numbers, and hyphens, and must start and end with a letter or number")
 	}
 	return nil
 }
@@ -77,17 +119,20 @@ type TokenProvider interface {
 	Invalidate()
 }
 
-// Link is a short link as stored by the API.
+// Link is a short link as stored by the API. It is served at
+// https://<domain>/<slug>; slugs are unique per domain.
 type Link struct {
-	ShortPath string `json:"short_path" jsonschema:"the short path (slug), without leading slash"`
-	TargetURL string `json:"target_url" jsonschema:"the https URL the short path redirects to"`
+	Domain    string `json:"domain" jsonschema:"the domain the link is served on, e.g. go.example.com"`
+	Slug      string `json:"slug" jsonschema:"the slug, without leading slash, unique per domain"`
+	TargetURL string `json:"target_url" jsonschema:"the https URL the short link redirects to"`
 	CreatedAt string `json:"created_at" jsonschema:"creation time, ISO 8601 UTC"`
 	UpdatedAt string `json:"updated_at" jsonschema:"last update time, ISO 8601 UTC"`
 }
 
 // LinkStatsSummary is one row of the stats overview.
 type LinkStatsSummary struct {
-	Path       string  `json:"path" jsonschema:"the redirect path including the leading slash, e.g. /docs"`
+	Domain     string  `json:"domain" jsonschema:"the domain the clicks were recorded on"`
+	Slug       string  `json:"slug" jsonschema:"the slug the clicks were recorded on, without leading slash"`
 	Clicks     int     `json:"clicks" jsonschema:"total number of recorded clicks"`
 	TargetURL  *string `json:"target_url" jsonschema:"target URL recorded with the most recent click seen"`
 	FirstClick *string `json:"first_click" jsonschema:"timestamp of the first recorded click"`
@@ -105,15 +150,16 @@ type Click struct {
 	Timestamp string `json:"timestamp" jsonschema:"click time, ISO 8601 UTC"`
 }
 
-// LinkStats is the response of GET /api/stats/{path}.
+// LinkStats is the response of GET /api/stats/{domain}/{slug}.
 type LinkStats struct {
-	Path         string  `json:"path" jsonschema:"the redirect path including the leading slash"`
+	Domain       string  `json:"domain" jsonschema:"the domain of the link"`
+	Slug         string  `json:"slug" jsonschema:"the slug of the link"`
 	Clicks       int     `json:"clicks" jsonschema:"number of clicks in the requested time range"`
 	TargetURL    *string `json:"target_url" jsonschema:"target URL recorded with the clicks, null if there were none"`
 	RecentClicks []Click `json:"recent_clicks" jsonschema:"up to 20 most recent clicks in the range, newest first"`
 }
 
-// StatsFilter narrows GET /api/stats/{path} to a time range. Days and
+// StatsFilter narrows GET /api/stats/{domain}/{slug} to a time range. Days and
 // From/To are alternatives; the API gives From/To precedence.
 type StatsFilter struct {
 	Days int    // last N days; 0 means unset
@@ -154,13 +200,17 @@ func NewClient(baseURL string, tokens TokenProvider, httpClient *http.Client) *C
 	return &Client{base: strings.TrimRight(baseURL, "/"), tokens: tokens, http: httpClient}
 }
 
-// ListLinks returns all links.
-func (c *Client) ListLinks(ctx context.Context) ([]Link, error) {
+// ListLinks returns the links of domain, or of every domain when domain is "".
+func (c *Client) ListLinks(ctx context.Context, domain string) ([]Link, error) {
 	var out struct {
 		Links []Link `json:"links"`
 		Count int    `json:"count"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/links", nil, nil, &out); err != nil {
+	var q url.Values
+	if domain != "" {
+		q = url.Values{"domain": {domain}}
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/links", q, nil, &out); err != nil {
 		return nil, err
 	}
 	if out.Links == nil {
@@ -169,24 +219,26 @@ func (c *Client) ListLinks(ctx context.Context) ([]Link, error) {
 	return out.Links, nil
 }
 
-// GetLink returns the link with the given slug. The API has no single-link
-// endpoint, so this lists all links and picks the match.
-func (c *Client) GetLink(ctx context.Context, slug string) (*Link, error) {
-	links, err := c.ListLinks(ctx)
+// GetLink returns the link with the given slug on domain. The API has no
+// single-link endpoint, so this lists the links of the domain and picks the
+// match.
+func (c *Client) GetLink(ctx context.Context, domain, slug string) (*Link, error) {
+	links, err := c.ListLinks(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
 	for i := range links {
-		if links[i].ShortPath == slug {
+		if links[i].Slug == slug {
 			return &links[i], nil
 		}
 	}
-	return nil, &APIError{Status: http.StatusNotFound, Message: fmt.Sprintf("Path '%s' not found", slug)}
+	return nil, &APIError{Status: http.StatusNotFound, Message: fmt.Sprintf("Slug '%s' not found on %s", slug, domain)}
 }
 
-// CreateLink creates a new link. The API returns 409 if the slug exists.
-func (c *Client) CreateLink(ctx context.Context, slug, targetURL string) (*Link, error) {
-	body := map[string]string{"short_path": slug, "target_url": targetURL}
+// CreateLink creates a new link. The API returns 409 if the slug exists on
+// the domain.
+func (c *Client) CreateLink(ctx context.Context, domain, slug, targetURL string) (*Link, error) {
+	body := map[string]string{"domain": domain, "slug": slug, "target_url": targetURL}
 	var out Link
 	if err := c.do(ctx, http.MethodPost, "/api/links", nil, body, &out); err != nil {
 		return nil, err
@@ -195,24 +247,33 @@ func (c *Client) CreateLink(ctx context.Context, slug, targetURL string) (*Link,
 }
 
 // UpdateLink changes the target URL of an existing link.
-func (c *Client) UpdateLink(ctx context.Context, slug, targetURL string) (*Link, error) {
+func (c *Client) UpdateLink(ctx context.Context, domain, slug, targetURL string) (*Link, error) {
 	body := map[string]string{"target_url": targetURL}
 	var out Link
-	if err := c.do(ctx, http.MethodPut, "/api/links/"+url.PathEscape(slug), nil, body, &out); err != nil {
+	if err := c.do(ctx, http.MethodPut, linkPath("/api/links/", domain, slug), nil, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // DeleteLink deletes a link. Recorded clicks are kept by the API.
-func (c *Client) DeleteLink(ctx context.Context, slug string) error {
-	return c.do(ctx, http.MethodDelete, "/api/links/"+url.PathEscape(slug), nil, nil, nil)
+func (c *Client) DeleteLink(ctx context.Context, domain, slug string) error {
+	return c.do(ctx, http.MethodDelete, linkPath("/api/links/", domain, slug), nil, nil, nil)
 }
 
-// StatsOverview returns click totals per redirect path, sorted by clicks
-// descending. With linkedOnly, paths without a current link are left out.
-func (c *Client) StatsOverview(ctx context.Context, linkedOnly bool) (*StatsOverview, error) {
+// linkPath appends /<domain>/<slug> to prefix, each segment escaped.
+func linkPath(prefix, domain, slug string) string {
+	return prefix + url.PathEscape(domain) + "/" + url.PathEscape(slug)
+}
+
+// StatsOverview returns click totals per link, sorted by clicks descending,
+// for domain or for every domain when domain is "". With linkedOnly, clicks
+// on links that no longer exist are left out.
+func (c *Client) StatsOverview(ctx context.Context, domain string, linkedOnly bool) (*StatsOverview, error) {
 	q := url.Values{"linked_only": {strconv.FormatBool(linkedOnly)}}
+	if domain != "" {
+		q.Set("domain", domain)
+	}
 	var out StatsOverview
 	if err := c.do(ctx, http.MethodGet, "/api/stats", q, nil, &out); err != nil {
 		return nil, err
@@ -223,8 +284,8 @@ func (c *Client) StatsOverview(ctx context.Context, linkedOnly bool) (*StatsOver
 	return &out, nil
 }
 
-// LinkStats returns click statistics for one slug.
-func (c *Client) LinkStats(ctx context.Context, slug string, f StatsFilter) (*LinkStats, error) {
+// LinkStats returns click statistics for one link.
+func (c *Client) LinkStats(ctx context.Context, domain, slug string, f StatsFilter) (*LinkStats, error) {
 	q := url.Values{}
 	if f.Days > 0 {
 		q.Set("days", strconv.Itoa(f.Days))
@@ -236,7 +297,7 @@ func (c *Client) LinkStats(ctx context.Context, slug string, f StatsFilter) (*Li
 		q.Set("to", f.To)
 	}
 	var out LinkStats
-	if err := c.do(ctx, http.MethodGet, "/api/stats/"+url.PathEscape(slug), q, nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, linkPath("/api/stats/", domain, slug), q, nil, &out); err != nil {
 		return nil, err
 	}
 	if out.RecentClicks == nil {

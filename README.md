@@ -59,16 +59,24 @@ See [`terraform/README.md`](terraform/README.md) for the resource layout.
 
 All `/api/*` endpoints require `Authorization: Bearer <token>`. Redirects are public.
 
+A link is addressed by domain and slug and served at `https://<domain>/<slug>`.
+Slugs are unique per domain, so the same slug can exist on several domains. The
+redirect Lambda takes the domain from the host the request was sent to.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/links` | List all links |
-| POST | `/api/links` | Create link (admin) |
-| PUT | `/api/links/{path}` | Update link (admin) |
-| DELETE | `/api/links/{path}` | Delete link (admin) |
-| GET | `/api/stats` | Click stats overview |
-| GET | `/api/stats/{path}` | Stats for one link |
+| GET | `/api/links?domain=<d>` | List links of one domain, or of all domains without `domain` |
+| POST | `/api/links` | Create link (admin); body `{"domain", "slug", "target_url"}` |
+| PUT | `/api/links/{domain}/{slug}` | Update link target (admin); body `{"target_url"}` |
+| DELETE | `/api/links/{domain}/{slug}` | Delete link (admin) |
+| GET | `/api/stats?domain=<d>` | Click stats per link, for one domain or all domains |
+| GET | `/api/stats/{domain}/{slug}` | Stats for one link |
 
-Stats support `?days=N`, `?from=YYYY-MM-DD&to=YYYY-MM-DD`, and `?linked_only=true`.
+Domains are lowercased and must be hostnames without scheme, port or path.
+Stats support `?days=N`, `?from=YYYY-MM-DD&to=YYYY-MM-DD`, and (overview only)
+`?linked_only=true`. The per-domain overview is a DynamoDB Query on the
+`by-domain` index; the all-domains overview scans the whole stats table, so its
+cost grows with the number of recorded clicks.
 
 ## Architecture
 

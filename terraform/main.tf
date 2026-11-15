@@ -58,6 +58,7 @@ module "lambda_links" {
         "dynamodb:PutItem",
         "dynamodb:GetItem",
         "dynamodb:DeleteItem",
+        "dynamodb:Query",
         "dynamodb:Scan",
         "dynamodb:UpdateItem",
       ]
@@ -86,7 +87,12 @@ module "lambda_stats" {
     },
     {
       effect    = "Allow"
-      actions   = ["dynamodb:Scan"]
+      actions   = ["dynamodb:Query"]
+      resources = [module.data.stats_by_domain_index_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:Query", "dynamodb:Scan"]
       resources = [module.data.links_table_arn]
     },
   ]

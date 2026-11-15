@@ -13,3 +13,7 @@ output "stats_table_name" {
 output "stats_table_arn" {
   value = aws_dynamodb_table.stats.arn
 }
+
+output "stats_by_domain_index_arn" {
+  value = "${aws_dynamodb_table.stats.arn}/index/${local.stats_by_domain_index}"
+}
