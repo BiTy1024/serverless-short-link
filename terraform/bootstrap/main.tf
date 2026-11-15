@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.11"
 
   required_providers {
     aws = {
@@ -48,17 +48,12 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
-resource "aws_dynamodb_table" "locks" {
-  name         = var.lock_table_name
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
+# State locking uses S3 lock files (backend option use_lockfile). A DynamoDB
+# lock table still tracked in this state is destroyed on apply.
+removed {
+  from = aws_dynamodb_table.locks
 
   lifecycle {
-    prevent_destroy = true
+    destroy = true
   }
 }
