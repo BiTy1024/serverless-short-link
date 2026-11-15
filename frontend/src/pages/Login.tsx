@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
+import { brandLogoUrl, brandName } from '../brand'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -27,8 +28,11 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-surface flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
+        {brandLogoUrl && (
+          <img src={brandLogoUrl} alt={brandName} className="h-12 w-auto max-w-60 object-contain mx-auto mb-4" />
+        )}
         <h1 className="text-2xl font-semibold tracking-tight text-text mb-8 text-center">
-          Short Links
+          {brandName}
         </h1>
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (

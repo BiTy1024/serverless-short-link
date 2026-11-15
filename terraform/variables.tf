@@ -46,3 +46,15 @@ variable "accent_color" {
   description = "Accent color for the admin frontend (hex)"
   default     = "#2A1058"
 }
+
+variable "brand_name" {
+  type        = string
+  description = "Name shown in the admin frontend header, on the login page and as the browser tab title"
+  default     = "Short Links"
+}
+
+variable "brand_logo_url" {
+  type        = string
+  description = "URL of a logo shown in the admin frontend header and on the login page, also used as favicon. Empty shows no logo."
+  default     = ""
+}

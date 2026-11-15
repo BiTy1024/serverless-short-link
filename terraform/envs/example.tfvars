@@ -6,3 +6,5 @@ primary_hosted_zone_id = ""         # Route 53 zone of primary_domain, route53 m
 route53_zone_ids       = []         # zones secondary domains may use in route53 mode
 default_redirect_url   = "https://your-default-redirect.de"
 accent_color           = "#2A1058"
+brand_name             = "Short Links"
+brand_logo_url         = "" # e.g. "https://your-domain.de/logo.svg"; empty shows no logo
