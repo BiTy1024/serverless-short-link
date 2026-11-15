@@ -5,11 +5,6 @@ issues/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
-*.samconfig.toml
-
-.aws-sam
-samconfig.toml
-/samconfig.toml
 
 # Terraform
 # (commit .terraform.lock.hcl for reproducible provider versions)

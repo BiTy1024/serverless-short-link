@@ -1,19 +1,10 @@
 #!/bin/bash
 set -e
 
-IAC="sam"
 CONFIG=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --iac)
-      IAC="$2"
-      shift 2
-      ;;
-    --iac=*)
-      IAC="${1#*=}"
-      shift
-      ;;
     --config)
       CONFIG="$2"
       shift 2
@@ -24,69 +15,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: ./deploy.sh [--iac=sam|terraform] [--config <file>]"
-      echo "  SAM:       --config <samconfig.toml>      (default: samconfig.toml)"
-      echo "  Terraform: --config <envs/myenv.tfvars>   (required)"
+      echo "Usage: ./deploy.sh --config <terraform/envs/myenv.tfvars>"
       exit 1
       ;;
   esac
 done
 
-case "$IAC" in
-  sam|terraform) ;;
-  *) echo "Error: --iac must be 'sam' or 'terraform' (got '$IAC')"; exit 1 ;;
-esac
-
-deploy_sam() {
-  local sam_config="${CONFIG:-samconfig.toml}"
-
-  if [[ ! -f "$sam_config" ]]; then
-    echo "Error: config file '$sam_config' not found"
-    exit 1
-  fi
-
-  STACK_NAME=$(grep -m1 'stack_name' "$sam_config" | sed 's/.*= *"\(.*\)"/\1/')
-  REGION=$(grep -m1 'region' "$sam_config" | sed 's/.*= *"\(.*\)"/\1/')
-
-  echo "Using SAM config: $sam_config (stack=$STACK_NAME, region=$REGION)"
-
-  echo "=== Building backend ==="
-  sam build
-
-  echo "=== Deploying backend ==="
-  local deploy_log
-  deploy_log=$(mktemp)
-  sam deploy --config-file "$sam_config" 2>&1 | tee "$deploy_log" || true
-  if grep -q "No changes to deploy" "$deploy_log"; then
-    echo "=== No backend changes, continuing with frontend ==="
-  else
-    echo "=== Backend deployed ==="
-  fi
-  rm -f "$deploy_log"
-
-  echo "=== Reading stack outputs ==="
-  local outputs
-  outputs=$(aws cloudformation describe-stacks \
-    --stack-name "$STACK_NAME" \
-    --query 'Stacks[0].Outputs' \
-    --output json --region "$REGION")
-
-  read_sam_output() {
-    echo "$outputs" | python3 -c "import sys,json; print(next(o['OutputValue'] for o in json.load(sys.stdin) if o['OutputKey']=='$1'))"
-  }
-
-  BUCKET=$(read_sam_output AdminBucketName)
-  DIST_ID=$(read_sam_output AdminDistributionId)
-  API_BASE=$(read_sam_output CustomDomainUrl)
-  USER_POOL_ID=$(read_sam_output UserPoolId)
-  CLIENT_ID=$(read_sam_output UserPoolClientId)
-  ACCENT_COLOR=$(read_sam_output AccentColor)
-  ADMIN_URL=$(read_sam_output AdminDomainUrl)
-}
-
 deploy_terraform() {
   if [[ -z "$CONFIG" ]]; then
-    echo "Error: --config <envs/*.tfvars> is required for Terraform"
+    echo "Error: --config <terraform/envs/*.tfvars> is required"
     exit 1
   fi
 
@@ -155,10 +92,6 @@ EOL
   echo "Admin frontend: $ADMIN_URL"
 }
 
-if [[ "$IAC" == "sam" ]]; then
-  deploy_sam
-else
-  deploy_terraform
-fi
+deploy_terraform
 
 publish_frontend
