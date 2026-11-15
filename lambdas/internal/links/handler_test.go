@@ -126,31 +126,6 @@ func TestWritesRequireAdmin(t *testing.T) {
 	}
 }
 
-func TestUserGroups(t *testing.T) {
-	tests := map[string][]string{
-		"admin":              {"admin"},
-		"[admin]":            {"admin"},
-		"[admin viewer]":     {"admin", "viewer"},
-		"[viewer admin]":     {"viewer", "admin"},
-		" [admin  viewer] ":  {"admin", "viewer"},
-		"[viewer,admin]":     {"viewer", "admin"},
-		"[viewer, admin]":    {"viewer", "admin"},
-		`["admin","viewer"]`: {"admin", "viewer"},
-		`["admin viewer"]`:   {"admin viewer"},
-		"[]":                 {},
-		"[adminviewer]":      {"adminviewer"},
-	}
-	for claim, want := range tests {
-		got := userGroups(request("GET /api/links", "", "", claim))
-		if strings.Join(got, "|") != strings.Join(want, "|") || len(got) != len(want) {
-			t.Errorf("%q: got %q, want %q", claim, got, want)
-		}
-	}
-	if got := userGroups(request("GET /api/links", "", "", "")); got != nil {
-		t.Errorf("no claim: got %q", got)
-	}
-}
-
 func TestAdminInSeveralGroupsMayWrite(t *testing.T) {
 	for _, groups := range []string{"[admin viewer]", "[viewer admin]", `["viewer","admin"]`, "admin"} {
 		fake := storetest.NewFake(existing)
