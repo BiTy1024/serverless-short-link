@@ -9,12 +9,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 )
 
 // TTY prompts on the controlling terminal (/dev/tty), so stdin and stdout
-// stay free for piping. Echo is switched off for secrets with `stty -echo`,
-// which keeps the binary free of terminal libraries.
+// stay free for piping. Echo is switched off for secrets with `stty`, which
+// keeps the binary free of terminal libraries.
 type TTY struct {
 	f  *os.File
 	rd *bufio.Reader
@@ -40,35 +41,45 @@ func (t *TTY) ReadLine(prompt string) (string, error) {
 	return t.readLine()
 }
 
-// ReadSecret implements Prompter. Echo is restored on return and on SIGINT
-// or SIGTERM while waiting for input.
+// ReadSecret implements Prompter. The terminal state is saved with
+// `stty -g` before echo is switched off, and exactly that state is restored
+// on every return and on SIGINT, SIGTERM, SIGHUP or SIGQUIT.
 func (t *TTY) ReadSecret(prompt string) (string, error) {
-	if _, err := t.f.WriteString(prompt); err != nil {
-		return "", err
+	saved, err := t.sttyOutput("-g")
+	if err != nil {
+		return "", fmt.Errorf("cannot read terminal state: %w", err)
 	}
-	if err := t.stty("-echo"); err != nil {
-		return "", fmt.Errorf("cannot switch off terminal echo: %w", err)
+	var once sync.Once
+	restore := func() {
+		once.Do(func() {
+			_ = t.stty(saved)
+			_, _ = t.f.WriteString("\n")
+		})
 	}
 
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	done := make(chan struct{})
 	go func() {
 		select {
-		case <-sigs:
-			_ = t.stty("echo")
-			_, _ = t.f.WriteString("\n")
-			os.Exit(130)
+		case sig := <-sigs:
+			restore()
+			os.Exit(128 + int(sig.(syscall.Signal)))
 		case <-done:
 		}
 	}()
 	defer func() {
 		close(done)
 		signal.Stop(sigs)
-		_ = t.stty("echo")
-		_, _ = t.f.WriteString("\n")
+		restore()
 	}()
 
+	if _, err := t.f.WriteString(prompt); err != nil {
+		return "", err
+	}
+	if err := t.stty("-echo"); err != nil {
+		return "", fmt.Errorf("cannot switch off terminal echo: %w", err)
+	}
 	return t.readLine()
 }
 
@@ -85,4 +96,12 @@ func (t *TTY) stty(arg string) error {
 	cmd.Stdin = t.f
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func (t *TTY) sttyOutput(arg string) (string, error) {
+	cmd := exec.Command("stty", arg)
+	cmd.Stdin = t.f
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
 }
