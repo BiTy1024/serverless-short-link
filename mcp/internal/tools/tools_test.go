@@ -199,10 +199,12 @@ func TestListLinksFilterAndPaging(t *testing.T) {
 	if out.Total != 4 || len(out.Links) != 2 || out.Links[0].ShortPath != "a" || out.NextOffset == nil || *out.NextOffset != 2 {
 		t.Fatalf("page 1 = %+v", out)
 	}
+	out = tools.ListLinksOutput{}
 	decode(t, call(t, cs, "list_links", map[string]any{"limit": 2, "offset": 2}), &out)
 	if len(out.Links) != 2 || out.Links[1].ShortPath != "docs" || out.NextOffset != nil {
 		t.Fatalf("page 2 = %+v", out)
 	}
+	out = tools.ListLinksOutput{}
 	decode(t, call(t, cs, "list_links", map[string]any{"contains": "DOC"}), &out)
 	if out.Total != 1 || out.Links[0].ShortPath != "docs" {
 		t.Fatalf("filtered = %+v", out)
