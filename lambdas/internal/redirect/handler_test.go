@@ -51,13 +51,16 @@ func TestRedirectHit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != 301 {
-				t.Fatalf("status = %d, want 301", resp.StatusCode)
+			if resp.StatusCode != 302 {
+				t.Fatalf("status = %d, want 302", resp.StatusCode)
+			}
+			if got := resp.Headers["Cache-Control"]; got != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", got)
 			}
 			if got := resp.Headers["Location"]; got != "https://go.example.com/target" {
 				t.Errorf("Location = %q", got)
 			}
-			if len(resp.Headers) != 1 || resp.Body != "" {
+			if len(resp.Headers) != 2 || resp.Body != "" {
 				t.Errorf("unexpected headers %v or body %q", resp.Headers, resp.Body)
 			}
 			if len(fake.Clicks) != 1 {
@@ -76,7 +79,7 @@ func TestRedirectHit(t *testing.T) {
 func TestRedirectMissUsesDefaultWithoutTracking(t *testing.T) {
 	fake := storetest.NewFake()
 	resp, _ := newHandler(fake).Handle(context.Background(), request("GET", "/unknown"))
-	if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
+	if resp.StatusCode != 302 || resp.Headers["Cache-Control"] != "no-store" || resp.Headers["Location"] != defaultURL {
 		t.Fatalf("got %d %v", resp.StatusCode, resp.Headers)
 	}
 	if len(fake.Clicks) != 0 {
@@ -88,7 +91,7 @@ func TestRedirectRootUsesDefaultWithoutLookup(t *testing.T) {
 	for _, path := range []string{"/", "", "///"} {
 		fake := storetest.NewFake()
 		resp, _ := newHandler(fake).Handle(context.Background(), request("GET", path))
-		if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
+		if resp.StatusCode != 302 || resp.Headers["Cache-Control"] != "no-store" || resp.Headers["Location"] != defaultURL {
 			t.Errorf("%q: got %d %v", path, resp.StatusCode, resp.Headers)
 		}
 		if fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
@@ -101,7 +104,7 @@ func TestRedirectTrackingFailureStillRedirects(t *testing.T) {
 	fake := storetest.NewFake(promo(host))
 	fake.Errors = map[string]error{"PutClick": errors.New("boom")}
 	resp, _ := newHandler(fake).Handle(context.Background(), request("GET", "/promo"))
-	if resp.StatusCode != 301 || resp.Headers["Location"] != "https://go.example.com/target" {
+	if resp.StatusCode != 302 || resp.Headers["Cache-Control"] != "no-store" || resp.Headers["Location"] != "https://go.example.com/target" {
 		t.Fatalf("got %d %v", resp.StatusCode, resp.Headers)
 	}
 }
@@ -184,8 +187,8 @@ func TestRedirectResolvesDomainFromHost(t *testing.T) {
 			req.RequestContext.DomainName = tt.domainName
 			req.Headers = tt.headers
 			resp, _ := newHandler(fake).Handle(context.Background(), req)
-			if want := "https://" + tt.want + "/target"; resp.StatusCode != 301 || resp.Headers["Location"] != want {
-				t.Fatalf("got %d %v, want 301 to %s", resp.StatusCode, resp.Headers, want)
+			if want := "https://" + tt.want + "/target"; resp.StatusCode != 302 || resp.Headers["Cache-Control"] != "no-store" || resp.Headers["Location"] != want {
+				t.Fatalf("got %d %v, want 302 to %s", resp.StatusCode, resp.Headers, want)
 			}
 			if len(fake.Clicks) != 1 || fake.Clicks[0].Domain != tt.want {
 				t.Errorf("clicks = %+v", fake.Clicks)
@@ -212,7 +215,7 @@ func TestRedirectMissingHostUsesFallbackWithoutLookup(t *testing.T) {
 		req.RequestContext.DomainName = ""
 		req.Headers = map[string]string{"host": hostHeader}
 		resp, _ := h.Handle(context.Background(), req)
-		if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
+		if resp.StatusCode != 302 || resp.Headers["Cache-Control"] != "no-store" || resp.Headers["Location"] != defaultURL {
 			t.Fatalf("host %q: got %d %v", hostHeader, resp.StatusCode, resp.Headers)
 		}
 		if configCalls != 0 || fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
@@ -259,7 +262,7 @@ func TestRedirectUsesFallbackOfTheDomain(t *testing.T) {
 	h.Domains = onlyDomain{name: host, url: "https://go.example.com/landing"}
 	for _, path := range []string{"/", "/unknown"} {
 		resp, _ := h.Handle(context.Background(), request("GET", path))
-		if resp.StatusCode != 301 || resp.Headers["Location"] != "https://go.example.com/landing" {
+		if resp.StatusCode != 302 || resp.Headers["Cache-Control"] != "no-store" || resp.Headers["Location"] != "https://go.example.com/landing" {
 			t.Errorf("%s: got %d %v", path, resp.StatusCode, resp.Headers)
 		}
 	}

@@ -1,5 +1,7 @@
 // Package redirect resolves (domain, slug) to its target URL, records the
-// click and answers with a 301. The domain is the host the request was sent to.
+// click and answers with a 302 Found and Cache-Control: no-store, so a changed
+// target reaches everyone and every visit is counted. The domain is the host
+// the request was sent to.
 package redirect
 
 import (
@@ -64,7 +66,7 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 
 	if host == "" {
 		slog.Info("Request without host, using default", "target_url", h.DefaultRedirectURL)
-		return movedPermanently(h.DefaultRedirectURL), nil
+		return found(h.DefaultRedirectURL), nil
 	}
 	fallback, served := h.Domains.Fallback(ctx, host)
 	if !served {
@@ -81,13 +83,16 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if hit {
 		h.track(ctx, host, slug, target)
 	}
-	return movedPermanently(target), nil
+	return found(target), nil
 }
 
-func movedPermanently(target string) events.APIGatewayV2HTTPResponse {
+func found(target string) events.APIGatewayV2HTTPResponse {
 	return events.APIGatewayV2HTTPResponse{
-		StatusCode: 301,
-		Headers:    map[string]string{"Location": target},
+		StatusCode: 302,
+		Headers: map[string]string{
+			"Location":      target,
+			"Cache-Control": "no-store",
+		},
 	}
 }
 
