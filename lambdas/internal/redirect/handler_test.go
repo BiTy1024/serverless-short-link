@@ -23,10 +23,11 @@ var fixedNow = time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
 
 func newHandler(s Store) *Handler {
 	return &Handler{
-		Store:       s,
-		Domains:     domain.Static{FallbackURL: defaultURL},
-		AdminOrigin: adminOrigin,
-		Now:         func() time.Time { return fixedNow },
+		Store:              s,
+		Domains:            domain.Static{FallbackURL: defaultURL},
+		DefaultRedirectURL: defaultURL,
+		AdminOrigin:        adminOrigin,
+		Now:                func() time.Time { return fixedNow },
 	}
 }
 
@@ -194,17 +195,30 @@ func TestRedirectResolvesDomainFromHost(t *testing.T) {
 	}
 }
 
+// noDomains reports every domain as unknown and counts its calls.
+type noDomains struct{ calls *int }
+
+func (n noDomains) Fallback(string) (string, bool) {
+	*n.calls++
+	return "", false
+}
+
 func TestRedirectMissingHostUsesFallbackWithoutLookup(t *testing.T) {
-	fake := storetest.NewFake(promo(host))
-	req := request("GET", "/promo")
-	req.RequestContext.DomainName = ""
-	req.Headers = map[string]string{"host": "  "}
-	resp, _ := newHandler(fake).Handle(context.Background(), req)
-	if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
-		t.Fatalf("got %d %v", resp.StatusCode, resp.Headers)
-	}
-	if fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
-		t.Errorf("lookups=%d clicks=%d", fake.Calls["GetLink"], len(fake.Clicks))
+	for _, hostHeader := range []string{"", "  ", ":443"} {
+		fake := storetest.NewFake(promo(host))
+		var configCalls int
+		h := newHandler(fake)
+		h.Domains = noDomains{calls: &configCalls}
+		req := request("GET", "/promo")
+		req.RequestContext.DomainName = ""
+		req.Headers = map[string]string{"host": hostHeader}
+		resp, _ := h.Handle(context.Background(), req)
+		if resp.StatusCode != 301 || resp.Headers["Location"] != defaultURL {
+			t.Fatalf("host %q: got %d %v", hostHeader, resp.StatusCode, resp.Headers)
+		}
+		if configCalls != 0 || fake.Calls["GetLink"] != 0 || len(fake.Clicks) != 0 {
+			t.Errorf("host %q: config calls=%d lookups=%d clicks=%d", hostHeader, configCalls, fake.Calls["GetLink"], len(fake.Clicks))
+		}
 	}
 }
 
