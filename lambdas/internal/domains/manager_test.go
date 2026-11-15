@@ -402,3 +402,19 @@ func TestDeleteLeavesUntaggedCertificate(t *testing.T) {
 		t.Errorf("deleted = %v, params = %v", e.certs.deleted, e.ssm.Names())
 	}
 }
+
+func TestRoute53RecordConflictIsStored(t *testing.T) {
+	e := newEnv(t, zoneID)
+	e.certs.issue(video, CertIssued)
+	e.zones.fail("UpsertAlias", errors.New("A video.example.org: record exists with another value"))
+
+	d, err := e.m.Create(ctx, CreateRequest{Domain: video, DNSMode: settings.DNSRoute53, HostedZoneID: zoneID, FallbackURL: "https://x.xx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStatus(t, d, settings.StatusPendingDNS)
+	stored := e.stored(t, video)
+	if stored.Error != "writing alias record: A video.example.org: record exists with another value" || stored.Status != settings.StatusPendingDNS {
+		t.Errorf("stored = %+v", stored)
+	}
+}

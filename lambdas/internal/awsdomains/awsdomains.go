@@ -313,9 +313,21 @@ func (g *Gateway) DeleteDomain(ctx context.Context, domain string) error {
 	return err
 }
 
-// Zones implements domains.Zones with Route 53.
+// ZonesAPI is the part of the Route 53 client Zones uses.
+type ZonesAPI interface {
+	ChangeResourceRecordSets(ctx context.Context, in *route53.ChangeResourceRecordSetsInput, opts ...func(*route53.Options)) (*route53.ChangeResourceRecordSetsOutput, error)
+	ListResourceRecordSets(ctx context.Context, in *route53.ListResourceRecordSetsInput, opts ...func(*route53.Options)) (*route53.ListResourceRecordSetsOutput, error)
+}
+
+// ErrRecordConflict is returned when a record of the same name and type
+// exists with another value; it is never overwritten.
+var ErrRecordConflict = errors.New("a record with this name and type already exists with another value")
+
+// Zones implements domains.Zones with Route 53. It writes a record only when
+// none of that name and type exists or the existing one already has the
+// value it would write, and deletes only records holding its own values.
 type Zones struct {
-	Client *route53.Client
+	Client ZonesAPI
 }
 
 // validationTTL is the TTL of the certificate validation CNAMEs.
@@ -331,8 +343,20 @@ func (z *Zones) change(ctx context.Context, zoneID string, action r53types.Chang
 	return err
 }
 
-// UpsertCNAME writes a CNAME record.
+// UpsertCNAME writes a CNAME record unless it exists with this value; a
+// record of that name and type with another value fails with
+// ErrRecordConflict.
 func (z *Zones) UpsertCNAME(ctx context.Context, zoneID string, r settings.Record) error {
+	set, err := z.find(ctx, zoneID, r.Name, r53types.RRType(r.Type))
+	if err != nil {
+		return err
+	}
+	if set != nil {
+		if holdsValue(set, r.Value) {
+			return nil
+		}
+		return fmt.Errorf("%s %s: %w", r.Type, r.Name, ErrRecordConflict)
+	}
 	return z.change(ctx, zoneID, r53types.ChangeActionUpsert, &r53types.ResourceRecordSet{
 		Name:            aws.String(r.Name),
 		Type:            r53types.RRType(r.Type),
@@ -342,8 +366,19 @@ func (z *Zones) UpsertCNAME(ctx context.Context, zoneID string, r settings.Recor
 }
 
 // UpsertAlias writes an A alias record for name pointing at the custom
-// domain's regional endpoint.
+// domain's regional endpoint, unless it exists with this target; an A
+// record with another value fails with ErrRecordConflict.
 func (z *Zones) UpsertAlias(ctx context.Context, zoneID, name string, target domains.Endpoint) error {
+	set, err := z.find(ctx, zoneID, name, r53types.RRTypeA)
+	if err != nil {
+		return err
+	}
+	if set != nil {
+		if aliasTo(set, target) {
+			return nil
+		}
+		return fmt.Errorf("A %s: %w", name, ErrRecordConflict)
+	}
 	return z.change(ctx, zoneID, r53types.ChangeActionUpsert, &r53types.ResourceRecordSet{
 		Name: aws.String(name),
 		Type: r53types.RRTypeA,
@@ -355,13 +390,22 @@ func (z *Zones) UpsertAlias(ctx context.Context, zoneID, name string, target dom
 	})
 }
 
+func holdsValue(set *r53types.ResourceRecordSet, value string) bool {
+	return set.AliasTarget == nil && len(set.ResourceRecords) == 1 &&
+		canonical(aws.ToString(set.ResourceRecords[0].Value)) == canonical(value)
+}
+
+func aliasTo(set *r53types.ResourceRecordSet, target domains.Endpoint) bool {
+	return set.AliasTarget != nil && canonical(aws.ToString(set.AliasTarget.DNSName)) == canonical(target.Target)
+}
+
 // DeleteCNAME removes the CNAME record r when it still holds r.Value.
 func (z *Zones) DeleteCNAME(ctx context.Context, zoneID string, r settings.Record) error {
 	set, err := z.find(ctx, zoneID, r.Name, r53types.RRType(r.Type))
 	if err != nil || set == nil {
 		return err
 	}
-	if len(set.ResourceRecords) != 1 || canonical(aws.ToString(set.ResourceRecords[0].Value)) != canonical(r.Value) {
+	if !holdsValue(set, r.Value) {
 		return nil
 	}
 	return z.change(ctx, zoneID, r53types.ChangeActionDelete, set)
@@ -374,7 +418,7 @@ func (z *Zones) DeleteAlias(ctx context.Context, zoneID, name string, target dom
 	if err != nil || set == nil {
 		return err
 	}
-	if set.AliasTarget == nil || canonical(aws.ToString(set.AliasTarget.DNSName)) != canonical(target.Target) {
+	if !aliasTo(set, target) {
 		return nil
 	}
 	return z.change(ctx, zoneID, r53types.ChangeActionDelete, set)
