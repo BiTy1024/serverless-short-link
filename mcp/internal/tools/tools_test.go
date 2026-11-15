@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/BiTy1024/serverless-short-link/mcp/internal/cognito"
 	"github.com/BiTy1024/serverless-short-link/mcp/internal/shortlink"
 	"github.com/BiTy1024/serverless-short-link/mcp/internal/shortlink/fakeapi"
 	"github.com/BiTy1024/serverless-short-link/mcp/internal/testhttp"
@@ -18,8 +19,13 @@ import (
 // returns a connected client session.
 func connect(t *testing.T, api *fakeapi.API) *mcp.ClientSession {
 	t.Helper()
+	return connectWith(t, api, fakeapi.NewTokens())
+}
+
+func connectWith(t *testing.T, api *fakeapi.API, tokens shortlink.TokenProvider) *mcp.ClientSession {
+	t.Helper()
 	ctx := context.Background()
-	client := shortlink.NewClient("https://short.test", fakeapi.NewTokens(), testhttp.Client(api))
+	client := shortlink.NewClient("https://short.test", tokens, testhttp.Client(api))
 	server := mcp.NewServer(&mcp.Implementation{Name: "shortlink", Version: "test"}, nil)
 	if err := tools.Register(server, client); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -228,5 +234,15 @@ func TestStatsTools(t *testing.T) {
 	decode(t, call(t, cs, "get_link_stats", map[string]any{"slug": "docs", "from": "2026-11-02"}), &st)
 	if st.Clicks != 1 || len(st.RecentClicks) != 1 {
 		t.Fatalf("link stats = %+v", st)
+	}
+}
+
+func TestRevokedRefreshTokenTellsUserToLogIn(t *testing.T) {
+	tokens := fakeapi.NewTokens()
+	tokens.Err = cognito.ErrRefreshTokenRejected
+	cs := connectWith(t, fakeapi.New(), tokens)
+	res := call(t, cs, "list_links", nil)
+	if !res.IsError || !strings.Contains(text(res), "run `shortlink-mcp login`") {
+		t.Fatalf("result: %s", text(res))
 	}
 }

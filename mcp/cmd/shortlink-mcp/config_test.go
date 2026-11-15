@@ -11,49 +11,60 @@ func env(m map[string]string) func(string) string {
 
 func validEnv() map[string]string {
 	return map[string]string{
-		"SHORTLINK_API_BASE":             "https://short.test",
-		"SHORTLINK_COGNITO_USER_POOL_ID": "eu-central-1_Example",
-		"SHORTLINK_COGNITO_CLIENT_ID":    "example-client",
-		"SHORTLINK_USERNAME":             "user@example.test",
-		"SHORTLINK_PASSWORD":             "placeholder",
+		envAPIBase:      "https://short.test",
+		envRegion:       "eu-central-1",
+		envClientID:     "example-client",
+		envRefreshToken: "placeholder-token",
 	}
 }
 
-func TestConfigDerivesRegion(t *testing.T) {
-	c, err := configFromEnv(env(validEnv()))
+func TestServerConfig(t *testing.T) {
+	c, err := serverConfigFromEnv(env(validEnv()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Region != "eu-central-1" {
-		t.Fatalf("region = %q", c.Region)
+	if c.Region != "eu-central-1" || c.RefreshToken != "placeholder-token" {
+		t.Fatalf("config = %+v", c)
 	}
 }
 
-func TestConfigMissingNamesVariablesNotValues(t *testing.T) {
+func TestServerConfigIgnoresUsernameAndPassword(t *testing.T) {
 	m := validEnv()
-	delete(m, "SHORTLINK_USERNAME")
-	delete(m, "SHORTLINK_COGNITO_CLIENT_ID")
-	_, err := configFromEnv(env(m))
-	if err == nil || !strings.Contains(err.Error(), "SHORTLINK_COGNITO_CLIENT_ID, SHORTLINK_USERNAME") {
+	delete(m, envRefreshToken)
+	m["SHORTLINK_USERNAME"] = "user@example.test"
+	m["SHORTLINK_PASSWORD"] = "placeholder"
+	_, err := serverConfigFromEnv(env(m))
+	if err == nil || !strings.Contains(err.Error(), envRefreshToken) || !strings.Contains(err.Error(), "shortlink-mcp login") {
 		t.Fatalf("err = %v", err)
 	}
-	if strings.Contains(err.Error(), "placeholder") {
-		t.Fatal("error leaks the password")
+}
+
+func TestServerConfigMissingNamesVariablesNotValues(t *testing.T) {
+	m := validEnv()
+	delete(m, envRegion)
+	delete(m, envClientID)
+	_, err := serverConfigFromEnv(env(m))
+	if err == nil || !strings.Contains(err.Error(), envRegion+", "+envClientID) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "placeholder-token") {
+		t.Fatal("error leaks the refresh token")
 	}
 }
 
-func TestConfigRegionMismatch(t *testing.T) {
+func TestServerConfigBadAPIBase(t *testing.T) {
 	m := validEnv()
-	m["SHORTLINK_COGNITO_REGION"] = "us-east-1"
-	if _, err := configFromEnv(env(m)); err == nil {
+	m[envAPIBase] = "short.test"
+	if _, err := serverConfigFromEnv(env(m)); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestConfigBadAPIBase(t *testing.T) {
-	m := validEnv()
-	m["SHORTLINK_API_BASE"] = "short.test"
-	if _, err := configFromEnv(env(m)); err == nil {
-		t.Fatal("expected error")
+func TestLoginConfigValidate(t *testing.T) {
+	if err := (loginConfig{Region: "eu-central-1"}).validate(); err == nil || !strings.Contains(err.Error(), envClientID) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := (loginConfig{Region: "eu-central-1", ClientID: "c"}).validate(); err != nil {
+		t.Fatal(err)
 	}
 }
