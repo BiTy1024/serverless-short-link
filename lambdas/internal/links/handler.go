@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -91,19 +92,27 @@ func (h *Handler) run(ctx context.Context, req events.APIGatewayV2HTTPRequest, r
 	return resp
 }
 
-// userGroups reads the cognito:groups claim, which the HTTP API JWT
-// authorizer passes as a string such as "[admin]": surrounding brackets and
-// all spaces are removed and the rest is split on commas.
+// userGroups reads the cognito:groups claim. The HTTP API JWT authorizer
+// passes array claims as a string: "[admin viewer]" (space separated), a
+// single group as "admin" or "[admin]". A JSON array string such as
+// ["admin","viewer"] is accepted as well. Commas also separate groups.
 func userGroups(req events.APIGatewayV2HTTPRequest) []string {
 	auth := req.RequestContext.Authorizer
 	if auth == nil || auth.JWT == nil {
 		return nil
 	}
-	groups := auth.JWT.Claims["cognito:groups"]
-	if groups == "" {
+	claim := strings.TrimSpace(auth.JWT.Claims["cognito:groups"])
+	if claim == "" {
 		return nil
 	}
-	return strings.Split(strings.ReplaceAll(strings.Trim(groups, "[]"), " ", ""), ",")
+	var list []string
+	if err := json.Unmarshal([]byte(claim), &list); err == nil {
+		return list
+	}
+	claim = strings.TrimSuffix(strings.TrimPrefix(claim, "["), "]")
+	return strings.FieldsFunc(claim, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
 }
 
 func validatePath(path string) string {
