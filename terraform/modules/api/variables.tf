@@ -10,17 +10,28 @@ variable "aws_region" {
 
 variable "domain_name" {
   type        = string
-  description = "Custom domain for the redirect service"
+  description = "Primary domain, the API's custom domain"
+}
+
+variable "certificate_arn" {
+  type        = string
+  description = "ARN of the validated regional certificate for domain_name"
+}
+
+variable "dns_mode" {
+  type        = string
+  description = "external or route53; route53 writes the alias record for domain_name"
 }
 
 variable "hosted_zone_id" {
   type        = string
-  description = "Route53 hosted zone id"
+  description = "Route 53 hosted zone id; only used in route53 mode"
+  default     = ""
 }
 
 variable "admin_origin" {
   type        = string
-  description = "Origin allowed by CORS (https://admin.<domain>)"
+  description = "Origin allowed by CORS (https://admin.<primary domain>)"
 }
 
 variable "user_pool_id" {
@@ -60,5 +71,13 @@ variable "stats_lambda_invoke_arn" {
 }
 
 variable "stats_lambda_name" {
+  type = string
+}
+
+variable "domains_lambda_invoke_arn" {
+  type = string
+}
+
+variable "domains_lambda_name" {
   type = string
 }

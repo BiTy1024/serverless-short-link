@@ -1,49 +1,3 @@
-terraform {
-  required_providers {
-    aws = {
-      source                = "hashicorp/aws"
-      configuration_aliases = [aws.us_east_1]
-    }
-  }
-}
-
-# --- us-east-1 ACM cert for CloudFront ---
-
-resource "aws_acm_certificate" "admin" {
-  provider = aws.us_east_1
-
-  domain_name       = var.admin_domain
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.admin.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      record = dvo.resource_record_value
-    }
-  }
-
-  zone_id         = var.hosted_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
-  ttl             = 60
-  allow_overwrite = true
-}
-
-resource "aws_acm_certificate_validation" "admin" {
-  provider = aws.us_east_1
-
-  certificate_arn         = aws_acm_certificate.admin.arn
-  validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
-}
-
 # --- S3 bucket for admin frontend ---
 
 resource "aws_s3_bucket" "admin" {
@@ -79,7 +33,7 @@ resource "aws_cloudfront_distribution" "admin" {
   is_ipv6_enabled     = true
 
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate_validation.admin.certificate_arn
+    acm_certificate_arn      = var.certificate_arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
   }
@@ -144,9 +98,11 @@ resource "aws_s3_bucket_policy" "admin" {
   policy = data.aws_iam_policy_document.admin_bucket.json
 }
 
-# --- Route53 alias for admin domain ---
+# --- Route 53 alias for the admin domain (route53 mode only) ---
 
 resource "aws_route53_record" "admin" {
+  count = var.dns_mode == "route53" ? 1 : 0
+
   zone_id = var.hosted_zone_id
   name    = var.admin_domain
   type    = "A"
