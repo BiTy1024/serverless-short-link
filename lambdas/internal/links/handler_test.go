@@ -378,3 +378,37 @@ func TestListByDomain(t *testing.T) {
 		t.Error("store was called")
 	}
 }
+
+func TestPathSlugIsValidatedLikeCreate(t *testing.T) {
+	const slugRule = "Slug must contain only lowercase letters, numbers, and hyphens. Must start and end with a letter or number."
+	tests := []struct {
+		slug, msg string
+	}{
+		{"Promo", slugRule},
+		{"PROMO", slugRule},
+		{"a--b", "Slug must not contain consecutive hyphens"},
+		{"admin", "Slug 'admin' is reserved and cannot be used as a short link"},
+		{strings.Repeat("a", 65), "Slug must be at most 64 characters"},
+		{"   ", "Slug is required"},
+	}
+	for _, route := range []struct{ key, body string }{
+		{routeUpdate, `{"target_url":"https://example.com/new"}`},
+		{routeDelete, ""},
+	} {
+		for _, tt := range tests {
+			fake := storetest.NewFake(existing)
+			resp := call(t, fake, request(route.key, "go.example.com/"+tt.slug, route.body, "[admin]"))
+			wantError(t, resp, 400, tt.msg)
+			if fake.Calls["UpdateLinkTarget"]+fake.Calls["DeleteLink"] != 0 {
+				t.Errorf("%s %q reached the store", route.key, tt.slug)
+			}
+		}
+	}
+
+	// Surrounding whitespace is trimmed, as on create.
+	fake := storetest.NewFake(existing)
+	resp := call(t, fake, request(routeDelete, "go.example.com/ promo ", "", "[admin]"))
+	if resp.StatusCode != 204 || len(fake.Links()) != 0 {
+		t.Errorf("delete of trimmed slug: %d %s", resp.StatusCode, resp.Body)
+	}
+}

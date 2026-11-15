@@ -16,6 +16,7 @@ import (
 
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/apigw"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/linkslug"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 )
 
@@ -184,7 +185,10 @@ func (h *Handler) detail(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if err != nil {
 		return apigw.Error(400, err.Error()), nil
 	}
-	slug := req.PathParameters["path"]
+	slug := apigw.TrimSpace(req.PathParameters["path"])
+	if msg := linkslug.Validate(slug); msg != "" {
+		return apigw.Error(400, msg), nil
+	}
 
 	r, err := h.timeRange(req.QueryStringParameters)
 	if errors.Is(err, errInvalidFilter) {
