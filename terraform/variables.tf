@@ -46,3 +46,27 @@ variable "accent_color" {
   description = "Accent color for the admin frontend (hex)"
   default     = "#2A1058"
 }
+
+variable "brand_name" {
+  type        = string
+  description = "Name shown in the admin frontend header, on the login page and as the browser tab title"
+  default     = "Short Links"
+
+  # deploy.sh writes the value double-quoted into the frontend env file; Vite would cut at '"' and expand '$'.
+  validation {
+    condition     = !can(regex("[\"$\\\\\r\n]", var.brand_name))
+    error_message = "brand_name must not contain double quotes, dollar signs, backslashes or newlines."
+  }
+}
+
+variable "brand_logo_url" {
+  type        = string
+  description = "URL of a logo shown in the admin frontend header and on the login page, also used as favicon. Empty shows no logo."
+  default     = ""
+
+  # deploy.sh writes the value double-quoted into the frontend env file; Vite would cut at '"' and expand '$'.
+  validation {
+    condition     = var.brand_logo_url == "" || (startswith(var.brand_logo_url, "https://") && !can(regex("[\"$\\\\\r\n]", var.brand_logo_url)))
+    error_message = "brand_logo_url must be empty or an https:// URL without double quotes, dollar signs, backslashes or newlines."
+  }
+}

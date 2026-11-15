@@ -66,6 +66,8 @@ deploy_terraform() {
   USER_POOL_ID=$(read_tf_output user_pool_id)
   CLIENT_ID=$(read_tf_output user_pool_client_id)
   ACCENT_COLOR=$(read_tf_output accent_color)
+  BRAND_NAME=$(read_tf_output brand_name)
+  BRAND_LOGO_URL=$(read_tf_output brand_logo_url)
   ADMIN_URL=$(read_tf_output admin_domain_url)
   REGION=$(grep -m1 '^aws_region' "$tfvars_abs" | sed 's/.*= *"\(.*\)"/\1/')
   REGION="${REGION:-eu-central-1}"
@@ -78,7 +80,12 @@ VITE_API_BASE=$API_BASE
 VITE_USER_POOL_ID=$USER_POOL_ID
 VITE_USER_POOL_CLIENT_ID=$CLIENT_ID
 VITE_ACCENT_COLOR="$ACCENT_COLOR"
+VITE_BRAND_NAME="$BRAND_NAME"
+VITE_BRAND_LOGO_URL="$BRAND_LOGO_URL"
 EOL
+
+  echo "=== Installing frontend dependencies ==="
+  (cd frontend && npm ci)
 
   echo "=== Building frontend ==="
   (cd frontend && npm run build)

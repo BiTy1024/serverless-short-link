@@ -43,6 +43,16 @@ output "accent_color" {
   value       = var.accent_color
 }
 
+output "brand_name" {
+  description = "Brand name for the admin frontend"
+  value       = var.brand_name
+}
+
+output "brand_logo_url" {
+  description = "Logo URL for the admin frontend (empty: no logo)"
+  value       = var.brand_logo_url
+}
+
 output "links_table_name" {
   description = "DynamoDB table name for links"
   value       = module.data.links_table_name

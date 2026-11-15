@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
+import { brandLogoUrl, brandName } from '../brand'
 
 export default function Layout() {
   const { logout } = useAuth()
@@ -9,7 +10,12 @@ export default function Layout() {
       <nav className="border-b border-border bg-surface sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-8">
-            <span className="text-lg font-semibold tracking-tight text-text">Short Links</span>
+            <span className="flex items-center gap-2 text-lg font-semibold tracking-tight text-text">
+              {brandLogoUrl && (
+                <img src={brandLogoUrl} alt="" className="h-7 w-auto max-w-40 object-contain" />
+              )}
+              {brandName}
+            </span>
             <div className="flex gap-6">
               <NavLink
                 to="/"

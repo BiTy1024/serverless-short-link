@@ -44,6 +44,8 @@ The repo-root `deploy.sh` wraps this and also handles the frontend build + S3 sy
 ./deploy.sh --config=terraform/envs/myenv.tfvars
 ```
 
+`accent_color`, `brand_name` and `brand_logo_url` brand the admin frontend; Terraform only passes them through as outputs, which `deploy.sh` writes into the frontend build. Defaults and effects are in the repository README under Branding.
+
 ## Certificates
 
 `modules/certs` requests both certificates of the primary domain: the regional one for the API custom domain and the us-east-1 one for CloudFront (through `provider "aws" { alias = "us_east_1" }`). In route53 mode it also writes their validation records. The `aws_acm_certificate_validation` resources that wait for validation live in the root module, so `-target=module.certs` returns without waiting.

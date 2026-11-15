@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider'
 import App from './App'
+import { brandLogoUrl, brandName } from './brand'
 import './index.css'
 
 const accentColor = import.meta.env.VITE_ACCENT_COLOR
@@ -11,6 +12,17 @@ if (accentColor) {
   root.style.setProperty('--color-accent', accentColor)
   root.style.setProperty('--color-accent-light', `color-mix(in srgb, ${accentColor} 70%, white)`)
   root.style.setProperty('--color-accent-dark', `color-mix(in srgb, ${accentColor} 85%, black)`)
+}
+
+if (import.meta.env.VITE_BRAND_NAME) {
+  document.title = brandName
+}
+
+if (brandLogoUrl) {
+  const icon = document.createElement('link')
+  icon.rel = 'icon'
+  icon.href = brandLogoUrl
+  document.head.appendChild(icon)
 }
 
 createRoot(document.getElementById('root')!).render(
