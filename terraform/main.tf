@@ -255,9 +255,10 @@ module "lambda_domains" {
       resources = ["${local.apigateway_domains}/*"]
     },
     {
-      # Tags given to CreateDomainName; only the stack tag.
+      # Tags given to CreateDomainName; only the stack tag. API Gateway
+      # authorizes them as apigateway:PUT on the tags resource.
       effect     = "Allow"
-      actions    = ["apigateway:POST"]
+      actions    = ["apigateway:POST", "apigateway:PUT"]
       resources  = ["arn:aws:apigateway:${var.aws_region}::/tags/*"]
       conditions = local.stack_tag_request
     },
