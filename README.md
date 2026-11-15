@@ -43,7 +43,7 @@ the Terraform outputs and bakes them into the frontend build:
 | Variable | Default | Effect |
 |---|---|---|
 | `accent_color` | `"#2A1058"` | Accent color (hex) of buttons, links and charts |
-| `brand_name` | `"Short Links"` | Name in the header and on the login page, browser tab title, alt text of the logo |
+| `brand_name` | `"Short Links"` | Name in the header and on the login page, browser tab title |
 | `brand_logo_url` | `""` | Logo in the header (28px high) and on the login page (48px high), also the favicon. Empty shows no logo |
 
 The logo is loaded by the browser from that URL, so it must be publicly

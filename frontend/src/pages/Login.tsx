@@ -29,7 +29,7 @@ export default function Login() {
     <div className="min-h-screen bg-surface flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         {brandLogoUrl && (
-          <img src={brandLogoUrl} alt={brandName} className="h-12 w-auto max-w-60 object-contain mx-auto mb-4" />
+          <img src={brandLogoUrl} alt="" className="h-12 w-auto max-w-60 object-contain mx-auto mb-4" />
         )}
         <h1 className="text-2xl font-semibold tracking-tight text-text mb-8 text-center">
           {brandName}

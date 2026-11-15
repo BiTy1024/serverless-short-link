@@ -12,7 +12,7 @@ export default function Layout() {
           <div className="flex items-center gap-8">
             <span className="flex items-center gap-2 text-lg font-semibold tracking-tight text-text">
               {brandLogoUrl && (
-                <img src={brandLogoUrl} alt={brandName} className="h-7 w-auto max-w-40 object-contain" />
+                <img src={brandLogoUrl} alt="" className="h-7 w-auto max-w-40 object-contain" />
               )}
               {brandName}
             </span>
