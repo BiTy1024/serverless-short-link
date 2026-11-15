@@ -108,7 +108,7 @@ func TestToolList(t *testing.T) {
 	}
 
 	schema, _ := json.Marshal(byName["create_link"].InputSchema)
-	for _, want := range []string{shortlink.SlugPattern, `"admin"`, `"required"`} {
+	for _, want := range []string{shortlink.SlugPattern, shortlink.DomainPattern, `"admin"`, `"required"`, `"domain"`} {
 		if !strings.Contains(string(schema), strings.ReplaceAll(want, `\`, `\\`)) {
 			t.Errorf("create_link schema %s lacks %s", schema, want)
 		}
@@ -119,33 +119,33 @@ func TestCreateGetUpdateDelete(t *testing.T) {
 	cs := connect(t, fakeapi.New())
 
 	var link shortlink.Link
-	decode(t, call(t, cs, "create_link", map[string]any{"slug": "docs", "target_url": "https://example.com/docs"}), &link)
-	if link.ShortPath != "docs" || link.TargetURL != "https://example.com/docs" {
+	decode(t, call(t, cs, "create_link", map[string]any{"domain": "go.example.com", "slug": "docs", "target_url": "https://example.com/docs"}), &link)
+	if link.Domain != "go.example.com" || link.Slug != "docs" || link.TargetURL != "https://example.com/docs" {
 		t.Fatalf("created %+v", link)
 	}
 
-	res := call(t, cs, "create_link", map[string]any{"slug": "docs", "target_url": "https://example.com/x"})
+	res := call(t, cs, "create_link", map[string]any{"domain": "go.example.com", "slug": "docs", "target_url": "https://example.com/x"})
 	if !res.IsError || !strings.Contains(text(res), "update_link") {
 		t.Fatalf("duplicate create: %s", text(res))
 	}
 
-	decode(t, call(t, cs, "update_link", map[string]any{"slug": "docs", "target_url": "https://example.com/v2"}), &link)
+	decode(t, call(t, cs, "update_link", map[string]any{"domain": "go.example.com", "slug": "docs", "target_url": "https://example.com/v2"}), &link)
 	if link.TargetURL != "https://example.com/v2" {
 		t.Fatalf("updated %+v", link)
 	}
 
-	decode(t, call(t, cs, "get_link", map[string]any{"slug": "docs"}), &link)
+	decode(t, call(t, cs, "get_link", map[string]any{"domain": "go.example.com", "slug": "docs"}), &link)
 	if link.TargetURL != "https://example.com/v2" {
 		t.Fatalf("get %+v", link)
 	}
 
 	var del tools.DeleteLinkOutput
-	decode(t, call(t, cs, "delete_link", map[string]any{"slug": "docs"}), &del)
-	if del.Deleted != "docs" {
+	decode(t, call(t, cs, "delete_link", map[string]any{"domain": "go.example.com", "slug": "docs"}), &del)
+	if del.Deleted != "docs" || del.Domain != "go.example.com" {
 		t.Fatalf("deleted %+v", del)
 	}
 
-	res = call(t, cs, "get_link", map[string]any{"slug": "docs"})
+	res = call(t, cs, "get_link", map[string]any{"domain": "go.example.com", "slug": "docs"})
 	if !res.IsError || !strings.Contains(text(res), "list_links") {
 		t.Fatalf("get after delete: %s", text(res))
 	}
@@ -154,24 +154,28 @@ func TestCreateGetUpdateDelete(t *testing.T) {
 func TestInputValidation(t *testing.T) {
 	cs := connect(t, fakeapi.New())
 	cases := []map[string]any{
-		{"slug": "api", "target_url": "https://example.com"},
-		{"slug": "Docs", "target_url": "https://example.com"},
-		{"slug": "a--b", "target_url": "https://example.com"},
-		{"slug": "-a", "target_url": "https://example.com"},
-		{"slug": strings.Repeat("a", 65), "target_url": "https://example.com"},
-		{"slug": "docs", "target_url": "http://example.com"},
-		{"slug": "docs"},
+		{"domain": "go.example.com", "slug": "api", "target_url": "https://example.com"},
+		{"domain": "go.example.com", "slug": "Docs", "target_url": "https://example.com"},
+		{"domain": "go.example.com", "slug": "a--b", "target_url": "https://example.com"},
+		{"domain": "go.example.com", "slug": "-a", "target_url": "https://example.com"},
+		{"domain": "go.example.com", "slug": strings.Repeat("a", 65), "target_url": "https://example.com"},
+		{"domain": "go.example.com", "slug": "docs", "target_url": "http://example.com"},
+		{"domain": "go.example.com", "slug": "docs"},
+		{"slug": "docs", "target_url": "https://example.com"},
+		{"domain": "localhost", "slug": "docs", "target_url": "https://example.com"},
+		{"domain": "go.example.com:443", "slug": "docs", "target_url": "https://example.com"},
+		{"domain": "127.0.0.1", "slug": "docs", "target_url": "https://example.com"},
 	}
 	for _, args := range cases {
 		if res := call(t, cs, "create_link", args); !res.IsError {
 			t.Errorf("create_link(%v) succeeded, want validation error", args)
 		}
 	}
-	res := call(t, cs, "get_link_stats", map[string]any{"slug": "docs", "days": 7, "from": "2026-01-01"})
+	res := call(t, cs, "get_link_stats", map[string]any{"domain": "go.example.com", "slug": "docs", "days": 7, "from": "2026-01-01"})
 	if !res.IsError {
 		t.Error("days together with from should be rejected")
 	}
-	res = call(t, cs, "get_link_stats", map[string]any{"slug": "docs", "from": "01.01.2026"})
+	res = call(t, cs, "get_link_stats", map[string]any{"domain": "go.example.com", "slug": "docs", "from": "01.01.2026"})
 	if !res.IsError {
 		t.Error("non-ISO date should be rejected")
 	}
@@ -181,7 +185,7 @@ func TestViewerGetsActionableError(t *testing.T) {
 	api := fakeapi.New()
 	api.ViewerOnly = true
 	cs := connect(t, api)
-	res := call(t, cs, "delete_link", map[string]any{"slug": "docs"})
+	res := call(t, cs, "delete_link", map[string]any{"domain": "go.example.com", "slug": "docs"})
 	if !res.IsError || !strings.Contains(text(res), "admin") {
 		t.Fatalf("viewer delete: %s", text(res))
 	}
@@ -191,22 +195,22 @@ func TestListLinksFilterAndPaging(t *testing.T) {
 	api := fakeapi.New()
 	cs := connect(t, api)
 	for _, s := range []string{"c", "a", "b", "docs"} {
-		call(t, cs, "create_link", map[string]any{"slug": s, "target_url": "https://example.com/" + s})
+		call(t, cs, "create_link", map[string]any{"domain": "go.example.com", "slug": s, "target_url": "https://example.com/" + s})
 	}
 
 	var out tools.ListLinksOutput
 	decode(t, call(t, cs, "list_links", map[string]any{"limit": 2}), &out)
-	if out.Total != 4 || len(out.Links) != 2 || out.Links[0].ShortPath != "a" || out.NextOffset == nil || *out.NextOffset != 2 {
+	if out.Total != 4 || len(out.Links) != 2 || out.Links[0].Slug != "a" || out.NextOffset == nil || *out.NextOffset != 2 {
 		t.Fatalf("page 1 = %+v", out)
 	}
 	out = tools.ListLinksOutput{}
 	decode(t, call(t, cs, "list_links", map[string]any{"limit": 2, "offset": 2}), &out)
-	if len(out.Links) != 2 || out.Links[1].ShortPath != "docs" || out.NextOffset != nil {
+	if len(out.Links) != 2 || out.Links[1].Slug != "docs" || out.NextOffset != nil {
 		t.Fatalf("page 2 = %+v", out)
 	}
 	out = tools.ListLinksOutput{}
 	decode(t, call(t, cs, "list_links", map[string]any{"contains": "DOC"}), &out)
-	if out.Total != 1 || out.Links[0].ShortPath != "docs" {
+	if out.Total != 1 || out.Links[0].Slug != "docs" {
 		t.Fatalf("filtered = %+v", out)
 	}
 }
@@ -214,26 +218,26 @@ func TestListLinksFilterAndPaging(t *testing.T) {
 func TestStatsTools(t *testing.T) {
 	api := fakeapi.New()
 	cs := connect(t, api)
-	call(t, cs, "create_link", map[string]any{"slug": "docs", "target_url": "https://example.com/docs"})
-	api.AddClick("/docs", "https://example.com/docs", "2026-11-01T10:00:00+00:00")
-	api.AddClick("/docs", "https://example.com/docs", "2026-11-03T10:00:00+00:00")
-	api.AddClick("/gone", "https://example.com/gone", "2026-11-02T10:00:00+00:00")
+	call(t, cs, "create_link", map[string]any{"domain": "go.example.com", "slug": "docs", "target_url": "https://example.com/docs"})
+	api.AddClick("go.example.com", "docs", "https://example.com/docs", "2026-11-01T10:00:00+00:00")
+	api.AddClick("go.example.com", "docs", "https://example.com/docs", "2026-11-03T10:00:00+00:00")
+	api.AddClick("go.example.com", "gone", "https://example.com/gone", "2026-11-02T10:00:00+00:00")
 
 	var ov tools.StatsOverviewOutput
 	decode(t, call(t, cs, "get_stats_overview", nil), &ov)
-	if ov.TotalClicks != 2 || ov.TotalPaths != 1 {
+	if ov.TotalClicks != 2 || ov.TotalLinks != 1 {
 		t.Fatalf("default overview = %+v", ov)
 	}
 	if api.LastQuery() != "linked_only=true" {
 		t.Fatalf("query = %q", api.LastQuery())
 	}
 	decode(t, call(t, cs, "get_stats_overview", map[string]any{"linked_only": false, "limit": 1}), &ov)
-	if ov.TotalClicks != 3 || ov.TotalPaths != 2 || len(ov.Stats) != 1 || ov.Stats[0].Path != "/docs" {
+	if ov.TotalClicks != 3 || ov.TotalLinks != 2 || len(ov.Stats) != 1 || ov.Stats[0].Slug != "docs" {
 		t.Fatalf("full overview = %+v", ov)
 	}
 
 	var st shortlink.LinkStats
-	decode(t, call(t, cs, "get_link_stats", map[string]any{"slug": "docs", "from": "2026-11-02"}), &st)
+	decode(t, call(t, cs, "get_link_stats", map[string]any{"domain": "go.example.com", "slug": "docs", "from": "2026-11-02"}), &st)
 	if st.Clicks != 1 || len(st.RecentClicks) != 1 {
 		t.Fatalf("link stats = %+v", st)
 	}
@@ -246,5 +250,71 @@ func TestRevokedRefreshTokenTellsUserToLogIn(t *testing.T) {
 	res := call(t, cs, "list_links", nil)
 	if !res.IsError || !strings.Contains(text(res), "run `shortlink-mcp login`") {
 		t.Fatalf("result: %s", text(res))
+	}
+}
+
+func TestSameSlugOnTwoDomainsThroughTools(t *testing.T) {
+	api := fakeapi.New()
+	cs := connect(t, api)
+	for _, d := range []string{"a.example", "B.Example"} {
+		res := call(t, cs, "create_link", map[string]any{"domain": d, "slug": "docs", "target_url": "https://example.com/" + d})
+		if res.IsError {
+			t.Fatalf("create on %s: %s", d, text(res))
+		}
+	}
+
+	var out tools.ListLinksOutput
+	decode(t, call(t, cs, "list_links", nil), &out)
+	if out.Total != 2 || out.Links[0].Domain != "a.example" || out.Links[1].Domain != "b.example" {
+		t.Fatalf("all links = %+v", out)
+	}
+	out = tools.ListLinksOutput{}
+	decode(t, call(t, cs, "list_links", map[string]any{"domain": "b.example"}), &out)
+	if out.Total != 1 || out.Links[0].Domain != "b.example" || api.LastQuery() != "domain=b.example" {
+		t.Fatalf("b.example links = %+v, query %q", out, api.LastQuery())
+	}
+
+	res := call(t, cs, "create_link", map[string]any{"domain": "a.example", "slug": "docs", "target_url": "https://example.com/x"})
+	if !res.IsError || !strings.Contains(text(res), "a.example") {
+		t.Fatalf("duplicate on a.example: %s", text(res))
+	}
+
+	var del tools.DeleteLinkOutput
+	decode(t, call(t, cs, "delete_link", map[string]any{"domain": "a.example", "slug": "docs"}), &del)
+	var link shortlink.Link
+	decode(t, call(t, cs, "get_link", map[string]any{"domain": "b.example", "slug": "docs"}), &link)
+	res = call(t, cs, "get_link", map[string]any{"domain": "a.example", "slug": "docs"})
+	if !res.IsError || !strings.Contains(text(res), "a.example") {
+		t.Fatalf("get after delete: %s", text(res))
+	}
+
+	api.AddClick("a.example", "docs", "https://example.com/a", "2026-11-01T10:00:00+00:00")
+	api.AddClick("b.example", "docs", "https://example.com/b", "2026-11-01T10:00:00+00:00")
+	var ov tools.StatsOverviewOutput
+	decode(t, call(t, cs, "get_stats_overview", map[string]any{"domain": "b.example"}), &ov)
+	if ov.TotalClicks != 1 || ov.Stats[0].Domain != "b.example" {
+		t.Fatalf("b.example overview = %+v", ov)
+	}
+	var st shortlink.LinkStats
+	decode(t, call(t, cs, "get_link_stats", map[string]any{"domain": "b.example", "slug": "docs"}), &st)
+	if st.Clicks != 1 || st.Domain != "b.example" {
+		t.Fatalf("b.example stats = %+v", st)
+	}
+}
+
+func TestToolsRequireDomain(t *testing.T) {
+	cs := connect(t, fakeapi.New())
+	for _, name := range []string{"get_link", "delete_link", "get_link_stats"} {
+		if res := call(t, cs, name, map[string]any{"slug": "docs"}); !res.IsError {
+			t.Errorf("%s without domain succeeded", name)
+		}
+	}
+	if res := call(t, cs, "update_link", map[string]any{"slug": "docs", "target_url": "https://example.com"}); !res.IsError {
+		t.Error("update_link without domain succeeded")
+	}
+	for _, name := range []string{"list_links", "get_stats_overview"} {
+		if res := call(t, cs, name, map[string]any{"domain": "localhost"}); !res.IsError {
+			t.Errorf("%s with an invalid domain succeeded", name)
+		}
 	}
 }

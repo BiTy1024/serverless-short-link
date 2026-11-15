@@ -16,8 +16,10 @@ import (
 )
 
 // Instructions is sent to clients on initialize.
-const Instructions = `Manage the short links of a serverless short-link service.
-A short link maps a slug (e.g. "docs", served at https://<domain>/docs) to an https target URL.
+const Instructions = `Manage the short links of a serverless short-link service that serves several domains.
+A short link maps a domain and a slug (e.g. domain "go.example.com" and slug "docs", served at https://go.example.com/docs) to an https target URL.
+Slugs are unique per domain, not globally: the same slug can exist on several domains, so every tool that addresses one link takes both domain and slug.
+Use list_links without a domain to see which domains have links.
 Slugs are lowercase letters, digits and single hyphens, 1-64 characters, and must not be one of: api, admin, health, status.
 Read tools work for users in the Cognito group 'viewer' or 'admin'; create, update and delete need 'admin'.`
 
@@ -31,26 +33,31 @@ const (
 func Register(server *mcp.Server, client *shortlink.Client) error {
 	h := &handlers{c: client}
 
-	listSchema, err := schemaFor[ListLinksInput](nil)
+	listSchema, err := schemaFor[ListLinksInput](domainProps("domain"))
 	if err != nil {
 		return err
 	}
-	slugSchema, err := schemaFor[SlugInput](slugProps("slug"))
+	linkSchema, err := schemaFor[LinkInput](func(s *jsonschema.Schema) {
+		domainProps("domain")(s)
+		slugProps("slug")(s)
+	})
 	if err != nil {
 		return err
 	}
 	writeSchema, err := schemaFor[WriteLinkInput](func(s *jsonschema.Schema) {
+		domainProps("domain")(s)
 		slugProps("slug")(s)
 		s.Properties["target_url"].Pattern = "^https://"
 	})
 	if err != nil {
 		return err
 	}
-	overviewSchema, err := schemaFor[StatsOverviewInput](nil)
+	overviewSchema, err := schemaFor[StatsOverviewInput](domainProps("domain"))
 	if err != nil {
 		return err
 	}
 	statsSchema, err := schemaFor[LinkStatsInput](func(s *jsonschema.Schema) {
+		domainProps("domain")(s)
 		slugProps("slug")(s)
 		date := `^[0-9]{4}-[0-9]{2}-[0-9]{2}$`
 		s.Properties["from"].Pattern = date
@@ -65,26 +72,29 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "list_links",
 		Title: "List short links",
-		Description: "List short links with their target URLs and timestamps, sorted by slug. " +
-			"Use 'contains' to filter by a substring of slug or target URL, and 'limit'/'offset' to page through large result sets. " +
+		Description: "List short links with their domain, target URL and timestamps, sorted by domain and slug. " +
+			"Set 'domain' to list one domain only; without it, links of every domain are listed. Slugs are unique per domain, so the same slug can appear once per domain. " +
+			"Use 'contains' to filter by a substring of domain, slug or target URL, and 'limit'/'offset' to page through large result sets. " +
 			"Returns links, total (matches before paging) and next_offset when more results exist.",
 		InputSchema: listSchema,
 		Annotations: readOnly("List short links"),
 	}, h.listLinks)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_link",
-		Title:       "Get a short link",
-		Description: "Get one short link by slug: its target URL and creation/update timestamps. Fails with a not-found error if the slug does not exist.",
-		InputSchema: slugSchema,
+		Name:  "get_link",
+		Title: "Get a short link",
+		Description: "Get one short link by domain and slug: its target URL and creation/update timestamps. " +
+			"Slugs are unique per domain, so both are required. Fails with a not-found error if the slug does not exist on that domain.",
+		InputSchema: linkSchema,
 		Annotations: readOnly("Get a short link"),
 	}, h.getLink)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "create_link",
 		Title: "Create a short link",
-		Description: "Create a new short link from slug to an https target URL. " +
-			"Fails if the slug already exists (use update_link to change an existing link). Requires the 'admin' group.",
+		Description: "Create a new short link on a domain, from slug to an https target URL; it is served at https://<domain>/<slug>. " +
+			"Slugs are unique per domain: the same slug may exist on other domains. " +
+			"Fails if the slug already exists on this domain (use update_link to change an existing link). Requires the 'admin' group.",
 		InputSchema: writeSchema,
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Create a short link",
@@ -97,7 +107,7 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 		Name:  "update_link",
 		Title: "Change a short link's target",
 		Description: "Replace the target URL of an existing short link. The previous target is overwritten and visitors are redirected to the new one immediately. " +
-			"Fails if the slug does not exist. Requires the 'admin' group.",
+			"The link is addressed by domain and slug, since slugs are unique per domain. Fails if the slug does not exist on that domain. Requires the 'admin' group.",
 		InputSchema: writeSchema,
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Change a short link's target",
@@ -110,9 +120,9 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "delete_link",
 		Title: "Delete a short link",
-		Description: "Permanently delete a short link; its URL stops redirecting. Recorded click statistics are kept. " +
-			"Cannot be undone. Requires the 'admin' group.",
-		InputSchema: slugSchema,
+		Description: "Permanently delete a short link, addressed by domain and slug; its URL stops redirecting. Links with the same slug on other domains are not affected. " +
+			"Recorded click statistics are kept. Cannot be undone. Requires the 'admin' group.",
+		InputSchema: linkSchema,
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Delete a short link",
 			DestructiveHint: ptr(true),
@@ -124,9 +134,10 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "get_stats_overview",
 		Title: "Click statistics overview",
-		Description: "Click totals per redirect path, sorted by clicks descending, plus the overall total. " +
-			"By default only paths that currently have a link are counted (linked_only=true); set linked_only=false to include clicks on deleted or unknown paths. " +
-			"Paths in the result include the leading slash, e.g. /docs. Use 'limit' to cap the number of rows.",
+		Description: "Click totals per link (domain and slug), sorted by clicks descending, plus the overall total. " +
+			"Set 'domain' to count one domain only; without it, every domain is counted, and the same slug on two domains appears as two rows. " +
+			"By default only links that currently exist are counted (linked_only=true); set linked_only=false to include clicks on deleted or unknown slugs. " +
+			"Use 'limit' to cap the number of rows.",
 		InputSchema: overviewSchema,
 		Annotations: readOnly("Click statistics overview"),
 	}, h.statsOverview)
@@ -134,7 +145,7 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "get_link_stats",
 		Title: "Click statistics for one link",
-		Description: "Click count and the 20 most recent clicks for one slug. " +
+		Description: "Click count and the 20 most recent clicks for one link, addressed by domain and slug (slugs are unique per domain). " +
 			"Optionally restrict to the last 'days' days, or to a date range with 'from' and/or 'to' (YYYY-MM-DD, UTC, inclusive); do not combine 'days' with 'from'/'to'. " +
 			"Without a filter, all recorded clicks are counted.",
 		InputSchema: statsSchema,
@@ -146,7 +157,8 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 
 // ListLinksInput is the input of list_links.
 type ListLinksInput struct {
-	Contains string `json:"contains,omitempty" jsonschema:"case-insensitive substring to match against slug or target URL"`
+	Domain   string `json:"domain,omitempty" jsonschema:"only list links on this domain, e.g. go.example.com; all domains when absent"`
+	Contains string `json:"contains,omitempty" jsonschema:"case-insensitive substring to match against domain, slug or target URL"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"maximum number of links to return (1-1000, default 100)"`
 	Offset   int    `json:"offset,omitempty" jsonschema:"number of matching links to skip, for paging (default 0)"`
 }
@@ -158,41 +170,46 @@ type ListLinksOutput struct {
 	NextOffset *int             `json:"next_offset,omitempty" jsonschema:"offset of the next page; absent on the last page"`
 }
 
-// SlugInput identifies one link.
-type SlugInput struct {
-	Slug string `json:"slug" jsonschema:"the short path, without leading slash, e.g. docs"`
+// LinkInput identifies one link.
+type LinkInput struct {
+	Domain string `json:"domain" jsonschema:"the domain the link is served on, e.g. go.example.com"`
+	Slug   string `json:"slug" jsonschema:"the slug, without leading slash, e.g. docs; unique per domain"`
 }
 
 // WriteLinkInput is the input of create_link and update_link.
 type WriteLinkInput struct {
-	Slug      string `json:"slug" jsonschema:"the short path, without leading slash, e.g. docs"`
+	Domain    string `json:"domain" jsonschema:"the domain the link is served on, e.g. go.example.com"`
+	Slug      string `json:"slug" jsonschema:"the slug, without leading slash, e.g. docs; unique per domain"`
 	TargetURL string `json:"target_url" jsonschema:"the https URL to redirect to, e.g. https://example.com/page"`
 }
 
 // DeleteLinkOutput is the output of delete_link.
 type DeleteLinkOutput struct {
+	Domain  string `json:"domain" jsonschema:"domain of the deleted link"`
 	Deleted string `json:"deleted" jsonschema:"slug of the deleted link"`
 }
 
 // StatsOverviewInput is the input of get_stats_overview.
 type StatsOverviewInput struct {
-	LinkedOnly *bool `json:"linked_only,omitempty" jsonschema:"count only paths that currently have a link (default true)"`
-	Limit      int   `json:"limit,omitempty" jsonschema:"maximum number of paths to return, most clicked first (1-1000, default 50)"`
+	Domain     string `json:"domain,omitempty" jsonschema:"only count clicks on this domain, e.g. go.example.com; all domains when absent"`
+	LinkedOnly *bool  `json:"linked_only,omitempty" jsonschema:"count only links that currently exist (default true)"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"maximum number of links to return, most clicked first (1-1000, default 50)"`
 }
 
 // StatsOverviewOutput is the output of get_stats_overview.
 type StatsOverviewOutput struct {
 	Stats       []shortlink.LinkStatsSummary `json:"stats"`
-	TotalClicks int                          `json:"total_clicks" jsonschema:"sum of clicks over all counted paths, including those cut off by limit"`
-	TotalPaths  int                          `json:"total_paths" jsonschema:"number of counted paths before limit"`
+	TotalClicks int                          `json:"total_clicks" jsonschema:"sum of clicks over all counted links, including those cut off by limit"`
+	TotalLinks  int                          `json:"total_links" jsonschema:"number of counted links before limit"`
 }
 
 // LinkStatsInput is the input of get_link_stats.
 type LinkStatsInput struct {
-	Slug string `json:"slug" jsonschema:"the short path, without leading slash, e.g. docs"`
-	Days int    `json:"days,omitempty" jsonschema:"only count clicks from the last N days (1-3650)"`
-	From string `json:"from,omitempty" jsonschema:"only count clicks on or after this UTC date, YYYY-MM-DD"`
-	To   string `json:"to,omitempty" jsonschema:"only count clicks on or before this UTC date, YYYY-MM-DD"`
+	Domain string `json:"domain" jsonschema:"the domain the link is served on, e.g. go.example.com"`
+	Slug   string `json:"slug" jsonschema:"the slug, without leading slash, e.g. docs; unique per domain"`
+	Days   int    `json:"days,omitempty" jsonschema:"only count clicks from the last N days (1-3650)"`
+	From   string `json:"from,omitempty" jsonschema:"only count clicks on or after this UTC date, YYYY-MM-DD"`
+	To     string `json:"to,omitempty" jsonschema:"only count clicks on or before this UTC date, YYYY-MM-DD"`
 }
 
 type handlers struct {
@@ -207,14 +224,19 @@ func (h *handlers) listLinks(ctx context.Context, _ *mcp.CallToolRequest, in Lis
 	if in.Offset < 0 {
 		return nil, ListLinksOutput{}, errors.New("offset must not be negative")
 	}
-	links, err := h.c.ListLinks(ctx)
+	domain, err := optionalDomain(in.Domain)
 	if err != nil {
-		return nil, ListLinksOutput{}, explain(err, "")
+		return nil, ListLinksOutput{}, err
+	}
+	links, err := h.c.ListLinks(ctx, domain)
+	if err != nil {
+		return nil, ListLinksOutput{}, explain(err, "", "")
 	}
 	needle := strings.ToLower(in.Contains)
 	matched := links[:0:0]
 	for _, l := range links {
-		if needle == "" || strings.Contains(l.ShortPath, needle) || strings.Contains(strings.ToLower(l.TargetURL), needle) {
+		if needle == "" || strings.Contains(l.Domain, needle) || strings.Contains(l.Slug, needle) ||
+			strings.Contains(strings.ToLower(l.TargetURL), needle) {
 			matched = append(matched, l)
 		}
 	}
@@ -231,38 +253,42 @@ func (h *handlers) listLinks(ctx context.Context, _ *mcp.CallToolRequest, in Lis
 	return nil, out, nil
 }
 
-func (h *handlers) getLink(ctx context.Context, _ *mcp.CallToolRequest, in SlugInput) (*mcp.CallToolResult, *shortlink.Link, error) {
-	if err := shortlink.ValidateSlug(in.Slug); err != nil {
+func (h *handlers) getLink(ctx context.Context, _ *mcp.CallToolRequest, in LinkInput) (*mcp.CallToolResult, *shortlink.Link, error) {
+	domain, err := validateLink(in.Domain, in.Slug)
+	if err != nil {
 		return nil, nil, err
 	}
-	l, err := h.c.GetLink(ctx, in.Slug)
-	return nil, l, explain(err, in.Slug)
+	l, err := h.c.GetLink(ctx, domain, in.Slug)
+	return nil, l, explain(err, domain, in.Slug)
 }
 
 func (h *handlers) createLink(ctx context.Context, _ *mcp.CallToolRequest, in WriteLinkInput) (*mcp.CallToolResult, *shortlink.Link, error) {
-	if err := validateWrite(in); err != nil {
+	domain, err := validateWrite(in)
+	if err != nil {
 		return nil, nil, err
 	}
-	l, err := h.c.CreateLink(ctx, in.Slug, in.TargetURL)
-	return nil, l, explain(err, in.Slug)
+	l, err := h.c.CreateLink(ctx, domain, in.Slug, in.TargetURL)
+	return nil, l, explain(err, domain, in.Slug)
 }
 
 func (h *handlers) updateLink(ctx context.Context, _ *mcp.CallToolRequest, in WriteLinkInput) (*mcp.CallToolResult, *shortlink.Link, error) {
-	if err := validateWrite(in); err != nil {
+	domain, err := validateWrite(in)
+	if err != nil {
 		return nil, nil, err
 	}
-	l, err := h.c.UpdateLink(ctx, in.Slug, in.TargetURL)
-	return nil, l, explain(err, in.Slug)
+	l, err := h.c.UpdateLink(ctx, domain, in.Slug, in.TargetURL)
+	return nil, l, explain(err, domain, in.Slug)
 }
 
-func (h *handlers) deleteLink(ctx context.Context, _ *mcp.CallToolRequest, in SlugInput) (*mcp.CallToolResult, DeleteLinkOutput, error) {
-	if err := shortlink.ValidateSlug(in.Slug); err != nil {
+func (h *handlers) deleteLink(ctx context.Context, _ *mcp.CallToolRequest, in LinkInput) (*mcp.CallToolResult, DeleteLinkOutput, error) {
+	domain, err := validateLink(in.Domain, in.Slug)
+	if err != nil {
 		return nil, DeleteLinkOutput{}, err
 	}
-	if err := h.c.DeleteLink(ctx, in.Slug); err != nil {
-		return nil, DeleteLinkOutput{}, explain(err, in.Slug)
+	if err := h.c.DeleteLink(ctx, domain, in.Slug); err != nil {
+		return nil, DeleteLinkOutput{}, explain(err, domain, in.Slug)
 	}
-	return nil, DeleteLinkOutput{Deleted: in.Slug}, nil
+	return nil, DeleteLinkOutput{Domain: domain, Deleted: in.Slug}, nil
 }
 
 func (h *handlers) statsOverview(ctx context.Context, _ *mcp.CallToolRequest, in StatsOverviewInput) (*mcp.CallToolResult, StatsOverviewOutput, error) {
@@ -270,12 +296,16 @@ func (h *handlers) statsOverview(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, StatsOverviewOutput{}, err
 	}
-	linkedOnly := in.LinkedOnly == nil || *in.LinkedOnly
-	ov, err := h.c.StatsOverview(ctx, linkedOnly)
+	domain, err := optionalDomain(in.Domain)
 	if err != nil {
-		return nil, StatsOverviewOutput{}, explain(err, "")
+		return nil, StatsOverviewOutput{}, err
 	}
-	out := StatsOverviewOutput{Stats: ov.Stats, TotalClicks: ov.TotalClicks, TotalPaths: len(ov.Stats)}
+	linkedOnly := in.LinkedOnly == nil || *in.LinkedOnly
+	ov, err := h.c.StatsOverview(ctx, domain, linkedOnly)
+	if err != nil {
+		return nil, StatsOverviewOutput{}, explain(err, "", "")
+	}
+	out := StatsOverviewOutput{Stats: ov.Stats, TotalClicks: ov.TotalClicks, TotalLinks: len(ov.Stats)}
 	if len(out.Stats) > limit {
 		out.Stats = out.Stats[:limit]
 	}
@@ -283,7 +313,8 @@ func (h *handlers) statsOverview(ctx context.Context, _ *mcp.CallToolRequest, in
 }
 
 func (h *handlers) linkStats(ctx context.Context, _ *mcp.CallToolRequest, in LinkStatsInput) (*mcp.CallToolResult, *shortlink.LinkStats, error) {
-	if err := shortlink.ValidateSlug(in.Slug); err != nil {
+	domain, err := validateLink(in.Domain, in.Slug)
+	if err != nil {
 		return nil, nil, err
 	}
 	if in.Days != 0 && (in.From != "" || in.To != "") {
@@ -292,28 +323,47 @@ func (h *handlers) linkStats(ctx context.Context, _ *mcp.CallToolRequest, in Lin
 	if in.Days < 0 {
 		return nil, nil, errors.New("days must be positive")
 	}
-	st, err := h.c.LinkStats(ctx, in.Slug, shortlink.StatsFilter{Days: in.Days, From: in.From, To: in.To})
-	return nil, st, explain(err, in.Slug)
+	st, err := h.c.LinkStats(ctx, domain, in.Slug, shortlink.StatsFilter{Days: in.Days, From: in.From, To: in.To})
+	return nil, st, explain(err, domain, in.Slug)
 }
 
-func validateWrite(in WriteLinkInput) error {
-	if err := shortlink.ValidateSlug(in.Slug); err != nil {
-		return err
+// optionalDomain normalises and validates a domain filter; "" means all domains.
+func optionalDomain(raw string) (string, error) {
+	domain := shortlink.NormalizeDomain(raw)
+	if domain == "" {
+		return "", nil
 	}
-	return shortlink.ValidateTargetURL(in.TargetURL)
+	return domain, shortlink.ValidateDomain(domain)
+}
+
+// validateLink normalises and validates the domain and slug of one link.
+func validateLink(rawDomain, slug string) (string, error) {
+	domain := shortlink.NormalizeDomain(rawDomain)
+	if err := shortlink.ValidateDomain(domain); err != nil {
+		return "", err
+	}
+	return domain, shortlink.ValidateSlug(slug)
+}
+
+func validateWrite(in WriteLinkInput) (string, error) {
+	domain, err := validateLink(in.Domain, in.Slug)
+	if err != nil {
+		return "", err
+	}
+	return domain, shortlink.ValidateTargetURL(in.TargetURL)
 }
 
 // explain adds a next step to API errors an agent can act on.
-func explain(err error, slug string) error {
+func explain(err error, domain, slug string) error {
 	var apiErr *shortlink.APIError
 	if !errors.As(err, &apiErr) {
 		return err
 	}
 	switch apiErr.Status {
 	case http.StatusNotFound:
-		return fmt.Errorf("%w; no link with slug %q exists, use list_links to find existing slugs", err, slug)
+		return fmt.Errorf("%w; no link with slug %q exists on %s, use list_links to find existing links", err, slug, domain)
 	case http.StatusConflict:
-		return fmt.Errorf("%w; use update_link to change the target of an existing link, or choose another slug", err)
+		return fmt.Errorf("%w; use update_link to change the target of the existing link on %s, or choose another slug", err, domain)
 	}
 	return err
 }
@@ -358,8 +408,24 @@ func slugProps(name string) func(*jsonschema.Schema) {
 	}
 }
 
+// sortLinks orders links by domain, then slug.
 func sortLinks(links []shortlink.Link) {
-	slices.SortFunc(links, func(a, b shortlink.Link) int { return strings.Compare(a.ShortPath, b.ShortPath) })
+	slices.SortFunc(links, func(a, b shortlink.Link) int {
+		if c := strings.Compare(a.Domain, b.Domain); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Slug, b.Slug)
+	})
+}
+
+// domainProps constrains the named property to the shape of a domain.
+// Case is not constrained, as the tools lowercase the domain.
+func domainProps(name string) func(*jsonschema.Schema) {
+	return func(s *jsonschema.Schema) {
+		p := s.Properties[name]
+		p.Pattern = shortlink.DomainPattern
+		p.MaxLength = ptr(shortlink.MaxDomainLength)
+	}
 }
 
 func readOnly(title string) *mcp.ToolAnnotations {
