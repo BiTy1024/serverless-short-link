@@ -11,6 +11,20 @@ locals {
   # Tag key the domains Lambda puts on the certificates it requests; it only
   # deletes certificates that carry it with this stack's name.
   cert_stack_tag = "short-link-stack"
+  # Conditions for actions that set tags: exactly the stack tag, with this
+  # stack's name.
+  cert_stack_tag_request = [
+    {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/${local.cert_stack_tag}"
+      values   = [var.stack_name]
+    },
+    {
+      test     = "ForAllValues:StringEquals"
+      variable = "aws:TagKeys"
+      values   = [local.cert_stack_tag]
+    },
+  ]
 }
 
 module "data" {
@@ -190,19 +204,29 @@ module "lambda_domains" {
     },
     {
       # RequestCertificate has no resource ARN before the certificate exists.
+      # The request must carry exactly the stack tag.
       effect    = "Allow"
       actions   = ["acm:RequestCertificate"]
       resources = ["*"]
-      conditions = [{
+      conditions = concat(local.cert_stack_tag_request, [{
         test     = "StringEquals"
         variable = "acm:ValidationMethod"
         values   = ["DNS"]
-      }]
+      }])
+    },
+    {
+      # Tagging is only needed for the tags of RequestCertificate. Limited to
+      # the stack tag with this stack's name, so the tag condition on
+      # DeleteCertificate cannot be met by tagging a foreign certificate
+      # with another stack's name.
+      effect     = "Allow"
+      actions    = ["acm:AddTagsToCertificate"]
+      resources  = [local.acm_cert_arns]
+      conditions = local.cert_stack_tag_request
     },
     {
       effect = "Allow"
       actions = [
-        "acm:AddTagsToCertificate",
         "acm:DescribeCertificate",
         "acm:ListTagsForCertificate",
       ]
