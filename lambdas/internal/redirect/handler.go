@@ -33,6 +33,9 @@ type DomainConfig interface {
 type Handler struct {
 	Store   Store
 	Domains DomainConfig
+	// DefaultRedirectURL is the target for requests that carry no host, which
+	// therefore have no domain to ask Domains about.
+	DefaultRedirectURL string
 	// AdminOrigin is the only origin allowed by the CORS headers on /api paths.
 	AdminOrigin string
 	Now         func() time.Time
@@ -59,6 +62,10 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 		return h.apiFallback(req), nil
 	}
 
+	if host == "" {
+		slog.Info("Request without host, using default", "target_url", h.DefaultRedirectURL)
+		return movedPermanently(h.DefaultRedirectURL), nil
+	}
 	fallback, served := h.Domains.Fallback(host)
 	if !served {
 		slog.Info("Domain not served", "domain", host)
@@ -74,11 +81,14 @@ func (h *Handler) Handle(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if hit {
 		h.track(ctx, host, slug, target)
 	}
+	return movedPermanently(target), nil
+}
 
+func movedPermanently(target string) events.APIGatewayV2HTTPResponse {
 	return events.APIGatewayV2HTTPResponse{
 		StatusCode: 301,
 		Headers:    map[string]string{"Location": target},
-	}, nil
+	}
 }
 
 // apiFallback answers /api paths that no API route matched: CORS preflight
@@ -118,9 +128,9 @@ func requestDomain(req events.APIGatewayV2HTTPRequest) string {
 }
 
 // resolve returns the target for slug on host; hit is false when fallback is
-// used. An empty host or slug is never looked up.
+// used. An empty slug is never looked up.
 func (h *Handler) resolve(ctx context.Context, host, slug, fallback string) (target string, hit bool, err error) {
-	if host == "" || slug == "" {
+	if slug == "" {
 		return fallback, false, nil
 	}
 	link, ok, err := h.Store.GetLink(ctx, host, slug)

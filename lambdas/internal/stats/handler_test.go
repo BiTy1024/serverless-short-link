@@ -315,3 +315,25 @@ func TestDetailInvalidDomain(t *testing.T) {
 		t.Errorf("store was called: %v", fake.Calls)
 	}
 }
+
+func TestDetailSlugIsValidatedLikeCreate(t *testing.T) {
+	tests := map[string]string{
+		"Promo": `{"error":"Slug must contain only lowercase letters, numbers, and hyphens. Must start and end with a letter or number."}`,
+		"a--b":  `{"error":"Slug must not contain consecutive hyphens"}`,
+		"api":   `{"error":"Slug 'api' is reserved and cannot be used as a short link"}`,
+		" ":     `{"error":"Slug is required"}`,
+	}
+	for slug, body := range tests {
+		fake := twoDomainFixture()
+		resp := call(t, fake, request(routeDetail, "a.example/"+slug, nil))
+		wantBody(t, resp, 400, body)
+		if len(fake.Calls) != 0 {
+			t.Errorf("%q: store was called: %v", slug, fake.Calls)
+		}
+	}
+
+	resp := call(t, twoDomainFixture(), request(routeDetail, "a.example/ promo ", nil))
+	if resp.StatusCode != 200 || !strings.Contains(resp.Body, `"slug":"promo","clicks":1`) {
+		t.Errorf("trimmed slug: %d %s", resp.StatusCode, resp.Body)
+	}
+}

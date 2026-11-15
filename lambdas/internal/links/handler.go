@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/apigw"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/domain"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/linkslug"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 )
 
@@ -42,15 +42,9 @@ const (
 	routeUpdate = "PUT /api/links/{domain}/{path}"
 	routeDelete = "DELETE /api/links/{domain}/{path}"
 
-	adminGroup    = "admin"
-	maxSlugLength = 64
+	adminGroup = "admin"
 	// minURLLength is the length of the shortest accepted URL, "https://x.xx".
 	minURLLength = len("https://x.xx")
-)
-
-var (
-	slugPattern   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
-	reservedSlugs = []string{"api", "admin", "health", "status"}
 )
 
 type routeFunc func(h *Handler, ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error)
@@ -115,22 +109,6 @@ func userGroups(req events.APIGatewayV2HTTPRequest) []string {
 	return strings.FieldsFunc(claim, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
 	})
-}
-
-func validateSlug(slug string) string {
-	switch {
-	case slug == "":
-		return "Slug is required"
-	case slices.Contains(reservedSlugs, slug):
-		return fmt.Sprintf("Slug '%s' is reserved and cannot be used as a short link", slug)
-	case utf8.RuneCountInString(slug) > maxSlugLength:
-		return fmt.Sprintf("Slug must be at most %d characters", maxSlugLength)
-	case strings.Contains(slug, "--"):
-		return "Slug must not contain consecutive hyphens"
-	case !slugPattern.MatchString(slug):
-		return "Slug must contain only lowercase letters, numbers, and hyphens. Must start and end with a letter or number."
-	}
-	return ""
 }
 
 func validateURL(url string) string {
@@ -226,7 +204,7 @@ func (h *Handler) create(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if err != nil {
 		return apigw.Error(400, err.Error()), nil
 	}
-	if msg := validateSlug(slug); msg != "" {
+	if msg := linkslug.Validate(slug); msg != "" {
 		return apigw.Error(400, msg), nil
 	}
 	if msg := validateURL(targetURL); msg != "" {
@@ -252,7 +230,10 @@ func (h *Handler) update(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if err != nil {
 		return apigw.Error(400, err.Error()), nil
 	}
-	slug := req.PathParameters["path"]
+	slug := apigw.TrimSpace(req.PathParameters["path"])
+	if msg := linkslug.Validate(slug); msg != "" {
+		return apigw.Error(400, msg), nil
+	}
 
 	body, err := parseBody(req.Body)
 	if errors.Is(err, errInvalidJSON) {
@@ -286,7 +267,10 @@ func (h *Handler) delete(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	if err != nil {
 		return apigw.Error(400, err.Error()), nil
 	}
-	slug := req.PathParameters["path"]
+	slug := apigw.TrimSpace(req.PathParameters["path"])
+	if msg := linkslug.Validate(slug); msg != "" {
+		return apigw.Error(400, msg), nil
+	}
 
 	err = h.Store.DeleteLink(ctx, name, slug)
 	if errors.Is(err, store.ErrLinkNotFound) {

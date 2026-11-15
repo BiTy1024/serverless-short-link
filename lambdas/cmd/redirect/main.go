@@ -25,15 +25,17 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defaultURL := env.Require("DEFAULT_REDIRECT_URL")
 	h := &redirect.Handler{
 		Store: &store.Dynamo{
 			Client:     dynamodb.NewFromConfig(cfg),
 			LinksTable: env.Require("LINKS_TABLE_NAME"),
 			StatsTable: env.Require("STATS_TABLE_NAME"),
 		},
-		Domains:     domain.Static{FallbackURL: env.Require("DEFAULT_REDIRECT_URL")},
-		AdminOrigin: env.Require("ADMIN_ORIGIN"),
-		Now:         time.Now,
+		Domains:            domain.Static{FallbackURL: defaultURL},
+		DefaultRedirectURL: defaultURL,
+		AdminOrigin:        env.Require("ADMIN_ORIGIN"),
+		Now:                time.Now,
 	}
 	lambda.Start(h.Handle)
 }
