@@ -5,13 +5,13 @@ Provisions the whole stack: Lambdas, HTTP API, DynamoDB, Cognito, S3, CloudFront
 ## Prerequisites
 
 - Go and make, to build the Lambda binaries (`make -C lambdas build` from the repo root) before `plan`/`apply`
-- Terraform >= 1.10
+- Terraform >= 1.11
 - AWS CLI configured for the target account
 - In route53 mode: the Route 53 hosted zone of the primary domain. In external mode: access to the DNS host to set CNAME records by hand
 
 ## One-time: bootstrap remote state
 
-The root module uses an S3 backend with S3 lock files (`use_lockfile`, Terraform >= 1.10). Provision the bucket once:
+The root module uses an S3 backend with S3 lock files (`use_lockfile`, Terraform >= 1.11). Provision the bucket once:
 
 ```bash
 cd terraform/bootstrap
@@ -21,6 +21,8 @@ terraform apply -var "state_bucket_name=YOUR-GLOBALLY-UNIQUE-BUCKET"
 ```
 
 Copy the snippet output into `terraform/backend.hcl` (gitignored), or pass the values via `-backend-config=...` on `terraform init`.
+
+An existing setup with a DynamoDB lock table switches in this order: replace `dynamodb_table` with `use_lockfile = true` in `backend.hcl` and run `terraform init -reconfigure` in `terraform/` first, then `terraform apply` in `terraform/bootstrap`, which destroys the lock table.
 
 ## Deploy
 
