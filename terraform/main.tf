@@ -106,6 +106,8 @@ module "api" {
   user_pool_id        = module.auth.user_pool_id
   user_pool_client_id = module.auth.user_pool_client_id
 
+  additional_jwt_audiences = [module.auth.mcp_client_id]
+
   redirect_lambda_invoke_arn = module.lambda_redirect.invoke_arn
   redirect_lambda_name       = module.lambda_redirect.function_name
 
