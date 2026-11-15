@@ -126,6 +126,13 @@ only in those zones.
   `default_redirect_url`, and it cannot be deleted on the settings page.
 - A certificate that ACM refuses (status `failed`, for example because of a CAA
   record) does not recover: delete the domain and add it again.
+- The management API answers on every served domain, not only the primary:
+  `https://<secondary>/api/...` reaches the same JWT-protected routes. Slugs
+  cannot be `api`, so this never shadows a short link.
+- The service never takes over what it did not create: an existing API Gateway
+  custom domain mapped to another API, or a Route 53 record of the same name and
+  type with another value, stops the setup with an error on the domain instead
+  of being changed or deleted.
 
 ### Adding users
 
