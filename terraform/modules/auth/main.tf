@@ -40,8 +40,8 @@ resource "aws_cognito_user_pool_client" "web" {
 
 # App client for the MCP server. A person signs in once with
 # USER_PASSWORD_AUTH (`shortlink-mcp login`) and stores the refresh token; the
-# server then only uses REFRESH_TOKEN_AUTH. Rotation stays off so the stored
-# refresh token remains valid for its full 90 days.
+# server then only uses REFRESH_TOKEN_AUTH. Refresh-token rotation is off by
+# default, so the stored refresh token remains valid for its full 90 days.
 resource "aws_cognito_user_pool_client" "mcp" {
   name         = "${var.stack_name}-mcp"
   user_pool_id = aws_cognito_user_pool.users.id
@@ -61,9 +61,5 @@ resource "aws_cognito_user_pool_client" "mcp" {
     access_token  = "minutes"
     id_token      = "minutes"
     refresh_token = "days"
-  }
-
-  refresh_token_rotation {
-    feature = "DISABLED"
   }
 }
