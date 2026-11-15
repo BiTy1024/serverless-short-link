@@ -23,30 +23,39 @@ letter or digit, and not one of `api`, `admin`, `health`, `status`.
 
 ## Authentication
 
-The API sits behind an API Gateway JWT authorizer for the Cognito web app
-client. The server signs in as a Cognito user with `USER_SRP_AUTH` (the flow
-the admin frontend uses, so the existing app client needs no change), keeps the
-access token in memory, renews it with `REFRESH_TOKEN_AUTH` two minutes before
-it expires, and signs in again if the refresh token is rejected. The password
-is never sent to Cognito, and neither tokens nor the password are logged.
+The API sits behind an API Gateway JWT authorizer. The MCP server uses its own
+Cognito app client (Terraform output `mcp_client_id`), which the authorizer
+accepts alongside the admin frontend's client. That client allows
+`USER_PASSWORD_AUTH` and `REFRESH_TOKEN_AUTH`, issues 60-minute access tokens
+and 90-day refresh tokens, and does not rotate refresh tokens.
+
+1. A person runs `shortlink-mcp login` once. It prompts for username and
+   password on the terminal (the password without echo, via `stty -echo`),
+   signs in and prints only the refresh token to stdout.
+2. The refresh token goes into the secret broker as `SHORTLINK_REFRESH_TOKEN`.
+3. The server exchanges it for access tokens, keeps the current one in memory
+   and renews it two minutes before it expires. It never sees the password.
+
+The refresh token expires after **90 days**, or earlier when it is revoked
+(for example by a global sign-out). Tool calls then fail with "refresh token
+expired or revoked: run `shortlink-mcp login`"; repeat steps 1 and 2 and
+restart the server.
 
 The user's Cognito group decides what works: `viewer` can use the read tools,
 `admin` all tools. A user still in `FORCE_CHANGE_PASSWORD` state must sign in
-once through the admin frontend first.
+once through the admin frontend first. Tokens and passwords are never logged,
+and `login` never writes the token to a file.
 
 ## Configuration
 
-| Variable | Required | Value |
+| Variable | Used by | Value |
 |---|---|---|
-| `SHORTLINK_API_BASE` | yes | base URL of the API, e.g. `https://go.example.com` |
-| `SHORTLINK_COGNITO_USER_POOL_ID` | yes | user pool ID, `<region>_<id>` (Terraform output `user_pool_id`) |
-| `SHORTLINK_COGNITO_CLIENT_ID` | yes | web app client ID (Terraform output `user_pool_client_id`) |
-| `SHORTLINK_COGNITO_REGION` | no | defaults to the region in the user pool ID |
-| `SHORTLINK_USERNAME` | yes | the user's email address |
-| `SHORTLINK_PASSWORD` | yes | the user's password |
+| `SHORTLINK_API_BASE` | server | base URL of the API, e.g. `https://go.example.com` |
+| `SHORTLINK_COGNITO_REGION` | server, login | region of the user pool, e.g. `eu-central-1` |
+| `SHORTLINK_COGNITO_CLIENT_ID` | server, login | MCP app client ID (Terraform output `mcp_client_id`) |
+| `SHORTLINK_REFRESH_TOKEN` | server | refresh token printed by `shortlink-mcp login` |
 
-The user pool ID is needed in addition to the client ID because SRP mixes the
-pool name into the password proof.
+`login` also takes `-region` and `-client-id` flags instead of the variables.
 
 ## Build
 
@@ -56,35 +65,34 @@ go build -o shortlink-mcp ./cmd/shortlink-mcp
 go test ./...
 ```
 
-## Register in Claude Code
+## Sign in and register in Claude Code
 
-Keep the username and password in the local secret broker, stored under the
-same names as the environment variables; `secret run` injects each secret as
-an environment variable of that name into the server process only:
+Get a refresh token and store it in the local secret broker (every 90 days):
 
 ```sh
-secret set SHORTLINK_USERNAME
-secret set SHORTLINK_PASSWORD
+shortlink-mcp login -region <region> -client-id <mcp-client-id>
+secret set SHORTLINK_REFRESH_TOKEN   # paste the token printed above
 ```
 
-The non-secret settings go into the registration directly:
+Register the server; `secret run` injects the secret as the environment
+variable of the same name into the server process only, and the non-secret
+settings go into the registration directly:
 
 ```sh
 claude mcp add shortlink \
   -e SHORTLINK_API_BASE=https://go.example.com \
-  -e SHORTLINK_COGNITO_USER_POOL_ID=<region>_<pool-id> \
-  -e SHORTLINK_COGNITO_CLIENT_ID=<app-client-id> \
-  -- secret run SHORTLINK_USERNAME,SHORTLINK_PASSWORD -- /absolute/path/to/shortlink-mcp
+  -e SHORTLINK_COGNITO_REGION=<region> \
+  -e SHORTLINK_COGNITO_CLIENT_ID=<mcp-client-id> \
+  -- secret run SHORTLINK_REFRESH_TOKEN -- /absolute/path/to/shortlink-mcp
 ```
 
-To manage more than one deployment, store the credentials under other names
-and register a second server; the names given to `secret run` must match the
-variable names the server reads.
+After a re-login only the secret changes; the registration stays as it is.
 
 ## Layout
 
 - `cmd/shortlink-mcp` — entry point and environment configuration
 - `internal/shortlink` — the API client; every path and request/response shape lives in `client.go`
-- `internal/cognito` — SRP sign-in and token refresh
+- `internal/cognito` — password sign-in and refresh-token exchange
+- `internal/login` — the `login` subcommand and its terminal prompts
 - `internal/tools` — MCP tool definitions
 - `internal/shortlink/fakeapi`, `internal/testhttp` — in-process fakes for tests
