@@ -6,7 +6,7 @@ variable "aws_region" {
 
 variable "stack_name" {
   type        = string
-  description = "Resource name prefix (mirrors SAM stack_name)"
+  description = "Resource name prefix"
 }
 
 variable "domain_name" {

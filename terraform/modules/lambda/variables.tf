@@ -8,19 +8,14 @@ variable "description" {
   description = "Function description"
 }
 
-variable "source_dir" {
+variable "binary_path" {
   type        = string
-  description = "Directory containing handler.py and requirements.txt"
-}
-
-variable "service_name" {
-  type        = string
-  description = "POWERTOOLS_SERVICE_NAME env var"
+  description = "Path to the compiled linux/arm64 bootstrap binary"
 }
 
 variable "environment_variables" {
   type        = map(string)
-  description = "Additional Lambda environment variables (merged with Powertools defaults)"
+  description = "Lambda environment variables"
   default     = {}
 }
 

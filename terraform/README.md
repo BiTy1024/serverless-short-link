@@ -1,9 +1,10 @@
 # Terraform Deployment
 
-Alternative to the SAM deploy path. Provisions the same infrastructure (Lambda, HTTP API, DynamoDB, Cognito, S3, CloudFront, Route53) so `deploy.sh --iac=terraform` can replace `deploy.sh` (SAM).
+Provisions the whole stack: Lambda, HTTP API, DynamoDB, Cognito, S3, CloudFront, Route53.
 
 ## Prerequisites
 
+- Go and make, to build the Lambda binaries (`make -C lambdas build` from the repo root) before `plan`/`apply`
 - Terraform >= 1.6
 - AWS CLI configured for the target account
 - Route53 hosted zone for the parent domain
@@ -29,6 +30,7 @@ cd terraform
 cp backend.example.hcl backend.hcl     # fill in real values
 cp envs/example.tfvars envs/myenv.tfvars  # fill in real values
 
+make -C ../lambdas build               # Lambda binaries Terraform zips
 terraform init -backend-config=backend.hcl
 terraform apply -var-file=envs/myenv.tfvars
 ```
@@ -36,12 +38,12 @@ terraform apply -var-file=envs/myenv.tfvars
 The repo-root `deploy.sh` wraps this and also handles the frontend build + S3 sync + CloudFront invalidation:
 
 ```bash
-./deploy.sh --iac=terraform --config=envs/myenv.tfvars
+./deploy.sh --config=terraform/envs/myenv.tfvars
 ```
 
-## Resource mapping vs. SAM
+## Certificates
 
-See `issues/12_plan.md` for the full SAM → Terraform resource table. Notable difference: the us-east-1 cert for CloudFront uses a `provider "aws" { alias = "us_east_1" }` instead of the custom-resource Lambda the SAM template needs.
+The us-east-1 cert for CloudFront uses a `provider "aws" { alias = "us_east_1" }`; the regional API cert is created in the deploy region. Both are DNS-validated in the Route53 hosted zone.
 
 ## Layout
 
@@ -51,7 +53,7 @@ terraform/
 ├── modules/
 │   ├── data/         # DynamoDB tables
 │   ├── auth/         # Cognito pool + groups + client
-│   ├── lambda/       # reusable Lambda wrapper (terraform-aws-modules/lambda/aws)
+│   ├── lambda/       # Lambda wrapper: zips a prebuilt bootstrap binary (terraform-aws-modules/lambda/aws)
 │   ├── api/          # HTTP API + JWT authorizer + custom domain
 │   └── frontend/     # S3 + CloudFront + us-east-1 cert + Route53
 ├── envs/             # per-environment .tfvars files
@@ -63,4 +65,4 @@ terraform/
 
 ## Destroying
 
-`prevent_destroy` is set on DynamoDB tables and the admin S3 bucket — matching the SAM `DeletionPolicy: Retain` on those resources. Remove those lifecycle blocks (or run a state-only delete) before `terraform destroy` if you really want a full teardown.
+`prevent_destroy` is set on DynamoDB tables and the admin S3 bucket. Remove those lifecycle blocks (or run a state-only delete) before `terraform destroy` if you really want a full teardown.

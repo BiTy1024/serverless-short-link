@@ -4,28 +4,15 @@
 import argparse
 import secrets
 import string
-import sys
 
 import boto3
 
 
-DEFAULT_STACK_NAME = "example-redirect-service"
 REGION = "eu-central-1"
 
 
-def get_user_pool_id(stack_name):
-    cf = boto3.client("cloudformation", region_name=REGION)
-    resp = cf.describe_stacks(StackName=stack_name)
-    for output in resp["Stacks"][0]["Outputs"]:
-        if output["OutputKey"] == "UserPoolId":
-            return output["OutputValue"]
-    sys.exit("UserPoolId not found in stack outputs")
-
-
-def add_user(email, password, stack_name, group=None, pool_id=None):
+def add_user(email, password, pool_id, group=None):
     cognito = boto3.client("cognito-idp", region_name=REGION)
-    if pool_id is None:
-        pool_id = get_user_pool_id(stack_name)
 
     cognito.admin_create_user(
         UserPoolId=pool_id,
@@ -64,11 +51,11 @@ if __name__ == "__main__":
     parser.add_argument("--email", required=True)
     parser.add_argument("--password", required=True)
     parser.add_argument("--group", choices=["admin", "viewer"])
-    parser.add_argument("--stack", default=DEFAULT_STACK_NAME)
     parser.add_argument(
         "--user-pool-id",
-        help="Use this pool id directly (skips CloudFormation lookup; for Terraform deploys)",
+        required=True,
+        help="Cognito User Pool ID (terraform output user_pool_id)",
     )
     args = parser.parse_args()
 
-    add_user(args.email, args.password, args.stack, args.group, args.user_pool_id)
+    add_user(args.email, args.password, args.user_pool_id, args.group)

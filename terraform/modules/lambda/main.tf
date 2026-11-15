@@ -1,27 +1,28 @@
+# Zips the prebuilt bootstrap binary; building it is not Terraform's job
+# (see lambdas/Makefile, run by deploy.sh).
+data "archive_file" "package" {
+  type             = "zip"
+  source_file      = var.binary_path
+  output_path      = "${var.binary_path}.zip"
+  output_file_mode = "0755"
+}
+
 module "function" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "~> 7.0"
 
   function_name = var.function_name
   description   = var.description
-  handler       = "handler.lambda_handler"
-  runtime       = "python3.12"
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
   architectures = ["arm64"]
   timeout       = 10
   memory_size   = 256
 
-  source_path = [{
-    path             = var.source_dir
-    pip_requirements = true
-  }]
+  create_package         = false
+  local_existing_package = data.archive_file.package.output_path
 
-  environment_variables = merge(
-    {
-      POWERTOOLS_SERVICE_NAME = var.service_name
-      POWERTOOLS_LOG_LEVEL    = "INFO"
-    },
-    var.environment_variables,
-  )
+  environment_variables = var.environment_variables
 
   attach_policy_statements = length(var.iam_statements) > 0
   policy_statements = {
