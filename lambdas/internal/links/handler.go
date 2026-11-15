@@ -33,7 +33,15 @@ type Store interface {
 // Handler serves the /api/links routes.
 type Handler struct {
 	Store Store
-	Now   func() time.Time
+	// Domains tells which domains are configured; links can only be
+	// created on those.
+	Domains Domains
+	Now     func() time.Time
+}
+
+// Domains reports whether a domain is configured in the domain settings.
+type Domains interface {
+	Exists(ctx context.Context, domain string) (bool, error)
 }
 
 const (
@@ -209,6 +217,13 @@ func (h *Handler) create(ctx context.Context, req events.APIGatewayV2HTTPRequest
 	}
 	if msg := validateURL(targetURL); msg != "" {
 		return apigw.Error(400, msg), nil
+	}
+	known, err := h.Domains.Exists(ctx, name)
+	if err != nil {
+		return events.APIGatewayV2HTTPResponse{}, err
+	}
+	if !known {
+		return apigw.Error(400, fmt.Sprintf("Unknown domain '%s'; add it in the domain settings first", name)), nil
 	}
 
 	now := store.Timestamp(h.Now())

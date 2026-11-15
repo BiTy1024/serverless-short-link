@@ -10,6 +10,8 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/settings"
+	"github.com/BiTy1024/serverless-short-link/lambdas/internal/settings/settingstest"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store"
 	"github.com/BiTy1024/serverless-short-link/lambdas/internal/store/storetest"
 )
@@ -27,8 +29,13 @@ var existing = store.Link{
 }
 
 func newHandler(s Store) *Handler {
-	return &Handler{Store: s, Now: func() time.Time { return fixedNow }}
+	return &Handler{Store: s, Domains: anyDomain{}, Now: func() time.Time { return fixedNow }}
 }
+
+// anyDomain treats every domain as configured.
+type anyDomain struct{}
+
+func (anyDomain) Exists(context.Context, string) (bool, error) { return true, nil }
 
 // request builds a request; path is "<domain>/<slug>" for the routes that
 // take both, or "".
@@ -411,4 +418,32 @@ func TestPathSlugIsValidatedLikeCreate(t *testing.T) {
 	if resp.StatusCode != 204 || len(fake.Links()) != 0 {
 		t.Errorf("delete of trimmed slug: %d %s", resp.StatusCode, resp.Body)
 	}
+}
+
+func TestCreateRejectsUnknownDomain(t *testing.T) {
+	ssm := settingstest.New()
+	ssm.Put("/stack/domains", settings.Domain{Domain: "go.example.com", Status: settings.StatusPendingDNS})
+	fake := storetest.NewFake()
+	h := &Handler{Store: fake, Domains: ssm.Store("/stack/domains"), Now: func() time.Time { return fixedNow }}
+
+	resp, err := h.Handle(context.Background(), request("POST /api/links", "", `{"domain":"other.example.com","slug":"new","target_url":"https://example.com/x"}`, "[admin]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, resp, 400, "Unknown domain 'other.example.com'; add it in the domain settings first")
+	if len(fake.Links()) != 0 {
+		t.Errorf("links = %v, want none", fake.Links())
+	}
+
+	resp, err = h.Handle(context.Background(), request("POST /api/links", "", `{"domain":"Go.Example.com","slug":"new","target_url":"https://example.com/x"}`, "[admin]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 201 {
+		t.Errorf("create on a configured, not yet active domain: status = %d, body %s", resp.StatusCode, resp.Body)
+	}
+
+	ssm.SetErr(errors.New("throttled"))
+	resp, _ = h.Handle(context.Background(), request("POST /api/links", "", `{"domain":"go.example.com","slug":"other","target_url":"https://example.com/x"}`, "[admin]"))
+	wantError(t, resp, 500, "Internal server error")
 }
