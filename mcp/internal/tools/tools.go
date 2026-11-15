@@ -19,6 +19,7 @@ import (
 const Instructions = `Manage the short links of a serverless short-link service that serves several domains.
 A short link maps a domain and a slug (e.g. domain "go.example.com" and slug "docs", served at https://go.example.com/docs) to an https target URL.
 Slugs are unique per domain, not globally: the same slug can exist on several domains, so every tool that addresses one link takes both domain and slug.
+Use list_domains to see which domains are configured; links can only be created on configured domains and redirect only on active ones.
 Use list_links without a domain to see which domains have links.
 Slugs are lowercase letters, digits and single hyphens, 1-64 characters, and must not be one of: api, admin, health, status.
 Read tools work for users in the Cognito group 'viewer' or 'admin'; create, update and delete need 'admin'.`
@@ -79,6 +80,15 @@ func Register(server *mcp.Server, client *shortlink.Client) error {
 		InputSchema: listSchema,
 		Annotations: readOnly("List short links"),
 	}, h.listLinks)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:  "list_domains",
+		Title: "List domains",
+		Description: "List the domains the service is configured for: the primary domain and every secondary domain, with role, DNS mode, status and fallback URL. " +
+			"Links can be created only on these domains, and redirect only once the domain's status is 'active'. " +
+			"For domains still being set up, validation_records and dns_records list the DNS records that have to exist. Domains are managed in the admin frontend, not through tools.",
+		Annotations: readOnly("List domains"),
+	}, h.listDomains)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "get_link",
@@ -170,6 +180,14 @@ type ListLinksOutput struct {
 	NextOffset *int             `json:"next_offset,omitempty" jsonschema:"offset of the next page; absent on the last page"`
 }
 
+// ListDomainsInput is the input of list_domains; it takes no arguments.
+type ListDomainsInput struct{}
+
+// ListDomainsOutput is the output of list_domains.
+type ListDomainsOutput struct {
+	Domains []shortlink.Domain `json:"domains"`
+}
+
 // LinkInput identifies one link.
 type LinkInput struct {
 	Domain string `json:"domain" jsonschema:"the domain the link is served on, e.g. go.example.com"`
@@ -251,6 +269,14 @@ func (h *handlers) listLinks(ctx context.Context, _ *mcp.CallToolRequest, in Lis
 		}
 	}
 	return nil, out, nil
+}
+
+func (h *handlers) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ ListDomainsInput) (*mcp.CallToolResult, ListDomainsOutput, error) {
+	domains, err := h.c.ListDomains(ctx)
+	if err != nil {
+		return nil, ListDomainsOutput{}, explain(err, "", "")
+	}
+	return nil, ListDomainsOutput{Domains: domains}, nil
 }
 
 func (h *handlers) getLink(ctx context.Context, _ *mcp.CallToolRequest, in LinkInput) (*mcp.CallToolResult, *shortlink.Link, error) {

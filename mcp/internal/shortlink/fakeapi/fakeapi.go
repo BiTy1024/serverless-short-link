@@ -17,13 +17,14 @@ import (
 	"github.com/BiTy1024/serverless-short-link/mcp/internal/shortlink"
 )
 
-// API implements http.Handler for /api/links and /api/stats.
+// API implements http.Handler for /api/links, /api/stats and GET /api/domains.
 type API struct {
 	// ViewerOnly makes every write return 403, as for a 'viewer' user.
 	ViewerOnly bool
 
 	mu       sync.Mutex
 	links    map[string]shortlink.Link // by key(domain, slug)
+	domains  []shortlink.Domain
 	clicks   []click
 	rejected map[string]bool
 	lastAuth string
@@ -88,6 +89,13 @@ func (a *API) AddClick(domain, slug, target, ts string) {
 	a.clicks = append(a.clicks, click{domain, slug, target, ts})
 }
 
+// AddDomain adds a domain setting to the GET /api/domains response.
+func (a *API) AddDomain(d shortlink.Domain) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.domains = append(a.domains, d)
+}
+
 // LastAuthorization returns the Authorization header of the last request.
 func (a *API) LastAuthorization() string {
 	a.mu.Lock()
@@ -138,6 +146,9 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			notFound(w)
 		}
+	case path == "/api/domains" && r.Method == http.MethodGet:
+		domains := append([]shortlink.Domain{}, a.domains...)
+		writeJSON(w, http.StatusOK, map[string]any{"domains": domains, "count": len(domains), "route53_zone_ids": []string{}})
 	case path == "/api/stats" && r.Method == http.MethodGet:
 		a.overview(w, r)
 	case strings.HasPrefix(path, "/api/stats/") && r.Method == http.MethodGet:

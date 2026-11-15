@@ -1,5 +1,5 @@
 // Package shortlink is an HTTP client for the short-link management API
-// (/api/links and /api/stats). Every request carries a Cognito access token
+// (/api/links, /api/stats and /api/domains). Every request carries a Cognito access token
 // as a bearer token; the token comes from a TokenProvider.
 //
 // All knowledge of API paths and request/response shapes lives in this file.
@@ -159,6 +159,28 @@ type LinkStats struct {
 	RecentClicks []Click `json:"recent_clicks" jsonschema:"up to 20 most recent clicks in the range, newest first"`
 }
 
+// DNSRecord is one DNS record a domain needs.
+type DNSRecord struct {
+	Name  string `json:"name" jsonschema:"record name"`
+	Type  string `json:"type" jsonschema:"record type, e.g. CNAME"`
+	Value string `json:"value" jsonschema:"record value"`
+}
+
+// Domain is the setting of one domain the service serves or is setting up.
+type Domain struct {
+	Domain            string      `json:"domain" jsonschema:"the domain name, e.g. go.example.com"`
+	Role              string      `json:"role" jsonschema:"primary (hosts the service and admin UI) or secondary (short links only)"`
+	DNSMode           string      `json:"dns_mode" jsonschema:"external (records set by hand at a DNS host) or route53 (records written automatically)"`
+	HostedZoneID      string      `json:"hosted_zone_id,omitempty" jsonschema:"Route 53 hosted zone, in route53 mode"`
+	FallbackURL       string      `json:"fallback_url" jsonschema:"where the domain root and unknown slugs redirect to"`
+	Status            string      `json:"status" jsonschema:"pending_validation, pending_dns, active or failed; links redirect only on active domains"`
+	TargetDomain      string      `json:"target_domain,omitempty" jsonschema:"API Gateway domain the domain must point at"`
+	ValidationRecords []DNSRecord `json:"validation_records" jsonschema:"certificate validation records"`
+	DNSRecords        []DNSRecord `json:"dns_records" jsonschema:"records that point the domain at the service, in external mode"`
+	Error             string      `json:"error,omitempty" jsonschema:"last setup problem, if any"`
+	UpdatedAt         string      `json:"updated_at,omitempty" jsonschema:"last change, ISO 8601 UTC"`
+}
+
 // StatsFilter narrows GET /api/stats/{domain}/{slug} to a time range. Days and
 // From/To are alternatives; the API gives From/To precedence.
 type StatsFilter struct {
@@ -259,6 +281,20 @@ func (c *Client) UpdateLink(ctx context.Context, domain, slug, targetURL string)
 // DeleteLink deletes a link. Recorded clicks are kept by the API.
 func (c *Client) DeleteLink(ctx context.Context, domain, slug string) error {
 	return c.do(ctx, http.MethodDelete, linkPath("/api/links/", domain, slug), nil, nil, nil)
+}
+
+// ListDomains returns the configured domains, the primary first.
+func (c *Client) ListDomains(ctx context.Context) ([]Domain, error) {
+	var out struct {
+		Domains []Domain `json:"domains"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/domains", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	if out.Domains == nil {
+		out.Domains = []Domain{}
+	}
+	return out.Domains, nil
 }
 
 // linkPath appends /<domain>/<slug> to prefix, each segment escaped.

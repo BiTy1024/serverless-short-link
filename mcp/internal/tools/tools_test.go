@@ -89,7 +89,7 @@ func TestToolList(t *testing.T) {
 	for _, tool := range res.Tools {
 		byName[tool.Name] = tool
 	}
-	for _, name := range []string{"list_links", "get_link", "create_link", "update_link", "delete_link", "get_stats_overview", "get_link_stats"} {
+	for _, name := range []string{"list_domains", "list_links", "get_link", "create_link", "update_link", "delete_link", "get_stats_overview", "get_link_stats"} {
 		tool := byName[name]
 		if tool == nil {
 			t.Errorf("tool %s missing", name)
@@ -103,8 +103,15 @@ func TestToolList(t *testing.T) {
 	if del.DestructiveHint == nil || !*del.DestructiveHint || del.ReadOnlyHint {
 		t.Errorf("delete_link annotations = %+v, want destructive", del)
 	}
-	if !byName["list_links"].Annotations.ReadOnlyHint {
-		t.Error("list_links should be read-only")
+	for _, name := range []string{"list_links", "list_domains"} {
+		if !byName[name].Annotations.ReadOnlyHint {
+			t.Errorf("%s should be read-only", name)
+		}
+	}
+	for name := range byName {
+		if strings.Contains(name, "domain") && name != "list_domains" {
+			t.Errorf("unexpected domain tool %s; domains are managed in the admin frontend only", name)
+		}
 	}
 
 	schema, _ := json.Marshal(byName["create_link"].InputSchema)
@@ -316,5 +323,27 @@ func TestToolsRequireDomain(t *testing.T) {
 		if res := call(t, cs, name, map[string]any{"domain": "localhost"}); !res.IsError {
 			t.Errorf("%s with an invalid domain succeeded", name)
 		}
+	}
+}
+
+func TestListDomains(t *testing.T) {
+	api := fakeapi.New()
+	cs := connect(t, api)
+
+	var out tools.ListDomainsOutput
+	decode(t, call(t, cs, "list_domains", nil), &out)
+	if out.Domains == nil || len(out.Domains) != 0 {
+		t.Fatalf("empty list = %#v", out.Domains)
+	}
+
+	api.AddDomain(shortlink.Domain{Domain: "short.example.com", Role: "primary", DNSMode: "external", Status: "active", FallbackURL: "https://example.com/"})
+	api.AddDomain(shortlink.Domain{
+		Domain: "video.example.org", Role: "secondary", DNSMode: "external", Status: "pending_dns",
+		DNSRecords: []shortlink.DNSRecord{{Name: "video.example.org", Type: "CNAME", Value: "d-1.execute-api.eu-central-1.amazonaws.com"}},
+	})
+	decode(t, call(t, cs, "list_domains", map[string]any{}), &out)
+	if len(out.Domains) != 2 || out.Domains[0].Role != "primary" || out.Domains[1].Status != "pending_dns" ||
+		len(out.Domains[1].DNSRecords) != 1 || out.Domains[1].DNSRecords[0].Type != "CNAME" {
+		t.Errorf("domains = %+v", out.Domains)
 	}
 }

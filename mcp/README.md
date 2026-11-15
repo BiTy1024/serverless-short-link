@@ -1,7 +1,8 @@
 # shortlink-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that manages short links
-through the service's HTTP management API (`/api/links`, `/api/stats`). It is a
+through the service's HTTP management API (`/api/links`, `/api/stats`,
+`/api/domains`). It is a
 thin client: validation, storage and permissions stay in the API. It runs
 locally over stdio.
 
@@ -9,6 +10,7 @@ locally over stdio.
 
 | Tool | API call | Notes |
 |---|---|---|
+| `list_domains` | `GET /api/domains` | read-only; role, DNS mode, status, fallback URL and the DNS records of each configured domain. Domains are managed in the admin frontend; there are no domain-changing tools |
 | `list_links` | `GET /api/links[?domain=]` | optional `domain` filter; substring filter `contains`, paging with `limit`/`offset` (applied client-side) |
 | `get_link` | `GET /api/links?domain=` | the API has no single-link endpoint; picks the slug from the domain's list |
 | `create_link` | `POST /api/links` | `admin` only; `domain` required; 409 if the slug exists on that domain |
