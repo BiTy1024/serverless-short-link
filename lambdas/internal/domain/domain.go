@@ -3,6 +3,8 @@
 package domain
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 )
@@ -45,6 +47,33 @@ func Valid(name string) bool {
 		}
 	}
 	return strings.ContainsFunc(labels[len(labels)-1], func(r rune) bool { return r >= 'a' && r <= 'z' })
+}
+
+// ErrRequired is returned by Parse for an empty domain.
+var ErrRequired = errors.New("Domain is required")
+
+// Parse returns a domain given in an API request in its stored form: trimmed
+// and lowercased. It fails with ErrRequired when the domain is empty and with
+// a descriptive error when it is not a valid hostname. Error texts are meant
+// for API responses.
+func Parse(raw string) (string, error) {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case name == "":
+		return "", ErrRequired
+	case !Valid(name):
+		return "", fmt.Errorf("Domain '%s' is not a valid hostname", name)
+	}
+	return name, nil
+}
+
+// ParseOptional is Parse for an optional domain: an empty or blank value
+// gives "" and no error.
+func ParseOptional(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	return Parse(raw)
 }
 
 func validLabel(l string) bool {
