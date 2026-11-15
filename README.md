@@ -150,8 +150,11 @@ only in those zones.
 
 ### Adding users
 
+The script's dependencies are pinned in `uv.lock`; `uv run` creates `.venv`
+from it on first use.
+
 ```bash
-python3 add_user.py --user-pool-id "$(cd terraform && terraform output -raw user_pool_id)" \
+uv run add_user.py --user-pool-id "$(cd terraform && terraform output -raw user_pool_id)" \
   --email user@example.com --password '...' --group admin   # or viewer
 ```
 
