@@ -80,6 +80,9 @@ VITE_USER_POOL_CLIENT_ID=$CLIENT_ID
 VITE_ACCENT_COLOR="$ACCENT_COLOR"
 EOL
 
+  echo "=== Installing frontend dependencies ==="
+  (cd frontend && npm ci)
+
   echo "=== Building frontend ==="
   (cd frontend && npm run build)
 
