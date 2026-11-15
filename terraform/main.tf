@@ -223,6 +223,13 @@ module "lambda_domains" {
       actions   = ["apigateway:GET", "apigateway:POST", "apigateway:DELETE"]
       resources = [local.apigateway_domains, "${local.apigateway_domains}/*"]
     },
+    {
+      # CreateDomainName and DeleteDomainName attach and detach the
+      # certificate under these actions.
+      effect    = "Allow"
+      actions   = ["apigateway:AddCertificateToDomain", "apigateway:RemoveCertificateFromDomain"]
+      resources = ["${local.apigateway_domains}/*"]
+    },
     ], length(var.route53_zone_ids) == 0 ? [] : [
     {
       effect    = "Allow"
