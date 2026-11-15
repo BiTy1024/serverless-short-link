@@ -1,9 +1,12 @@
-// Package cognito signs a user in to a Cognito user pool with USER_SRP_AUTH
-// and keeps the resulting access token fresh with REFRESH_TOKEN_AUTH.
+// Package cognito obtains Cognito user-pool tokens for the MCP app client.
 //
-// It calls the public Cognito Identity Provider JSON API directly. InitiateAuth
-// and RespondToAuthChallenge are unauthenticated operations for app clients
-// without a secret, so no AWS credentials are involved.
+// A person signs in once with Login (USER_PASSWORD_AUTH) and stores the
+// refresh token. TokenSource then exchanges that refresh token for access
+// tokens with REFRESH_TOKEN_AUTH.
+//
+// Both calls go to the public Cognito Identity Provider JSON API. InitiateAuth
+// is unauthenticated for app clients without a secret, so no AWS credentials
+// are involved.
 package cognito
 
 import (
@@ -22,44 +25,65 @@ import (
 // refreshMargin is how long before expiry a cached access token is renewed.
 const refreshMargin = 2 * time.Minute
 
-// Config identifies the user pool, app client and user.
-type Config struct {
-	Region     string
-	UserPoolID string
-	ClientID   string
-	Username   string
-	Password   string
+// Client identifies the Cognito app client.
+type Client struct {
+	Region   string
+	ClientID string
 	// Endpoint overrides https://cognito-idp.<Region>.amazonaws.com/.
 	Endpoint string
+	// HTTP is the client used for requests; nil means a 30s-timeout client.
+	HTTP *http.Client
 }
 
-// TokenSource hands out Cognito access tokens. It signs in on first use,
-// renews with the refresh token shortly before expiry, and falls back to a
-// full sign-in when the refresh token is rejected. Safe for concurrent use.
+// ErrRefreshTokenRejected means the stored refresh token has expired or was
+// revoked, and a person has to sign in again.
+var ErrRefreshTokenRejected = errors.New("refresh token expired or revoked: run `shortlink-mcp login` and store the new token with `secret set SHORTLINK_REFRESH_TOKEN`")
+
+// Login signs in with username and password (USER_PASSWORD_AUTH) and returns
+// the refresh token.
+func (c Client) Login(ctx context.Context, username, password string) (string, error) {
+	var resp authResponse
+	err := c.call(ctx, "InitiateAuth", map[string]any{
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"ClientId": c.ClientID,
+		"AuthParameters": map[string]string{
+			"USERNAME": username,
+			"PASSWORD": password,
+		},
+	}, &resp)
+	if err != nil {
+		return "", err
+	}
+	if resp.AuthenticationResult == nil {
+		if resp.ChallengeName == "NEW_PASSWORD_REQUIRED" {
+			return "", errors.New("cognito: the user must set a new password first; sign in once through the admin frontend")
+		}
+		return "", fmt.Errorf("cognito: challenge %q is not supported", resp.ChallengeName)
+	}
+	if resp.AuthenticationResult.RefreshToken == "" {
+		return "", errors.New("cognito: sign-in returned no refresh token")
+	}
+	return resp.AuthenticationResult.RefreshToken, nil
+}
+
+// TokenSource hands out access tokens obtained with a refresh token, cached
+// until refreshMargin before they expire. Safe for concurrent use.
 type TokenSource struct {
-	cfg  Config
-	http *http.Client
-	now  func() time.Time
-
-	mu           sync.Mutex
-	accessToken  string
+	client       Client
 	refreshToken string
-	expiresAt    time.Time
+	now          func() time.Time
+
+	mu          sync.Mutex
+	accessToken string
+	expiresAt   time.Time
 }
 
-// NewTokenSource returns a TokenSource. A nil httpClient uses a client with
-// a 30s timeout.
-func NewTokenSource(cfg Config, httpClient *http.Client) (*TokenSource, error) {
-	if cfg.Region == "" || cfg.UserPoolID == "" || cfg.ClientID == "" || cfg.Username == "" || cfg.Password == "" {
-		return nil, errors.New("cognito: region, user pool ID, client ID, username and password are all required")
+// NewTokenSource returns a TokenSource for the given refresh token.
+func NewTokenSource(c Client, refreshToken string) (*TokenSource, error) {
+	if c.Region == "" || c.ClientID == "" || refreshToken == "" {
+		return nil, errors.New("cognito: region, client ID and refresh token are required")
 	}
-	if cfg.Endpoint == "" {
-		cfg.Endpoint = fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/", cfg.Region)
-	}
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &TokenSource{cfg: cfg, http: httpClient, now: time.Now}, nil
+	return &TokenSource{client: c, refreshToken: refreshToken, now: time.Now}, nil
 }
 
 // Token returns a valid access token.
@@ -70,108 +94,33 @@ func (s *TokenSource) Token(ctx context.Context) (string, error) {
 	if s.accessToken != "" && s.now().Add(refreshMargin).Before(s.expiresAt) {
 		return s.accessToken, nil
 	}
-	if s.refreshToken != "" {
-		err := s.refresh(ctx)
-		if err == nil {
-			return s.accessToken, nil
-		}
+	var resp authResponse
+	err := s.client.call(ctx, "InitiateAuth", map[string]any{
+		"AuthFlow":       "REFRESH_TOKEN_AUTH",
+		"ClientId":       s.client.ClientID,
+		"AuthParameters": map[string]string{"REFRESH_TOKEN": s.refreshToken},
+	}, &resp)
+	if err != nil {
 		var ce *Error
-		if !errors.As(err, &ce) || ce.Type != "NotAuthorizedException" {
-			return "", err
+		if errors.As(err, &ce) && ce.Type == "NotAuthorizedException" {
+			return "", ErrRefreshTokenRejected
 		}
-		// Refresh token expired or revoked: sign in again.
-		s.refreshToken = ""
-	}
-	if err := s.signIn(ctx); err != nil {
 		return "", err
 	}
+	if resp.AuthenticationResult == nil || resp.AuthenticationResult.AccessToken == "" {
+		return "", fmt.Errorf("cognito: refresh returned no access token (challenge %q)", resp.ChallengeName)
+	}
+	s.accessToken = resp.AuthenticationResult.AccessToken
+	s.expiresAt = s.now().Add(time.Duration(resp.AuthenticationResult.ExpiresIn) * time.Second)
 	return s.accessToken, nil
 }
 
-// Invalidate drops the cached access token; the refresh token is kept.
+// Invalidate drops the cached access token.
 func (s *TokenSource) Invalidate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.accessToken = ""
 	s.expiresAt = time.Time{}
-}
-
-func (s *TokenSource) signIn(ctx context.Context) error {
-	srp, err := newSRPClient(s.cfg.UserPoolID)
-	if err != nil {
-		return err
-	}
-	var init authResponse
-	err = s.call(ctx, "InitiateAuth", map[string]any{
-		"AuthFlow": "USER_SRP_AUTH",
-		"ClientId": s.cfg.ClientID,
-		"AuthParameters": map[string]string{
-			"USERNAME": s.cfg.Username,
-			"SRP_A":    srp.srpAHex(),
-		},
-	}, &init)
-	if err != nil {
-		return err
-	}
-	if init.ChallengeName != "PASSWORD_VERIFIER" {
-		return unsupportedChallenge(init.ChallengeName)
-	}
-
-	responses, err := srp.passwordVerifier(init.ChallengeParameters, s.cfg.Password, s.now())
-	if err != nil {
-		return err
-	}
-	var final authResponse
-	err = s.call(ctx, "RespondToAuthChallenge", map[string]any{
-		"ChallengeName":      "PASSWORD_VERIFIER",
-		"ClientId":           s.cfg.ClientID,
-		"Session":            init.Session,
-		"ChallengeResponses": responses,
-	}, &final)
-	if err != nil {
-		return err
-	}
-	if final.AuthenticationResult == nil {
-		return unsupportedChallenge(final.ChallengeName)
-	}
-	s.store(final.AuthenticationResult)
-	return nil
-}
-
-func (s *TokenSource) refresh(ctx context.Context) error {
-	var resp authResponse
-	err := s.call(ctx, "InitiateAuth", map[string]any{
-		"AuthFlow":       "REFRESH_TOKEN_AUTH",
-		"ClientId":       s.cfg.ClientID,
-		"AuthParameters": map[string]string{"REFRESH_TOKEN": s.refreshToken},
-	}, &resp)
-	if err != nil {
-		return err
-	}
-	if resp.AuthenticationResult == nil {
-		return unsupportedChallenge(resp.ChallengeName)
-	}
-	s.store(resp.AuthenticationResult)
-	return nil
-}
-
-func (s *TokenSource) store(r *authResult) {
-	s.accessToken = r.AccessToken
-	s.expiresAt = s.now().Add(time.Duration(r.ExpiresIn) * time.Second)
-	// REFRESH_TOKEN_AUTH returns a new refresh token only when rotation is on.
-	if r.RefreshToken != "" {
-		s.refreshToken = r.RefreshToken
-	}
-}
-
-func unsupportedChallenge(name string) error {
-	if name == "NEW_PASSWORD_REQUIRED" {
-		return errors.New("cognito: the user must set a new password first; sign in once through the admin frontend")
-	}
-	if name == "" {
-		return errors.New("cognito: response contained neither tokens nor a challenge")
-	}
-	return fmt.Errorf("cognito: challenge %s is not supported by this client", name)
 }
 
 type authResult struct {
@@ -181,10 +130,8 @@ type authResult struct {
 }
 
 type authResponse struct {
-	AuthenticationResult *authResult       `json:"AuthenticationResult"`
-	ChallengeName        string            `json:"ChallengeName"`
-	ChallengeParameters  map[string]string `json:"ChallengeParameters"`
-	Session              string            `json:"Session"`
+	AuthenticationResult *authResult `json:"AuthenticationResult"`
+	ChallengeName        string      `json:"ChallengeName"`
 }
 
 // Error is an error response from Cognito. It never contains request data.
@@ -195,18 +142,26 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("cognito: %s: %s", e.Type, e.Message) }
 
-func (s *TokenSource) call(ctx context.Context, op string, in, out any) error {
+func (c Client) call(ctx context.Context, op string, in, out any) error {
+	endpoint := c.Endpoint
+	if endpoint == "" {
+		endpoint = fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/", c.Region)
+	}
+	hc := c.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 30 * time.Second}
+	}
 	body, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.Endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "AWSCognitoIdentityProviderService."+op)
-	resp, err := s.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("cognito %s: %w", op, err)
 	}
@@ -228,8 +183,8 @@ func (s *TokenSource) call(ctx context.Context, op string, in, out any) error {
 		if e.Type == "" {
 			e.Type = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
-		if e.Type == "InvalidParameterException" && op == "InitiateAuth" {
-			e.Message += " (check that the app client allows USER_SRP_AUTH and REFRESH_TOKEN_AUTH)"
+		if e.Type == "InvalidParameterException" {
+			e.Message += " (check that SHORTLINK_COGNITO_CLIENT_ID is the MCP app client, which allows USER_PASSWORD_AUTH and REFRESH_TOKEN_AUTH)"
 		}
 		return &Error{Type: e.Type, Message: e.Message}
 	}
