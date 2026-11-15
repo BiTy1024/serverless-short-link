@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -38,7 +39,7 @@ func main() {
 	var err error
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "login":
-		err = runLogin(ctx, os.Args[2:])
+		err = runLogin(ctx, os.Args[2:], stdoutIsTerminal)
 	case len(os.Args) > 1:
 		err = fmt.Errorf("unknown argument %q; usage: shortlink-mcp [login]", os.Args[1])
 	default:
@@ -70,7 +71,20 @@ func runServer(ctx context.Context) error {
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
-func runLogin(ctx context.Context, args []string) error {
+// errStdoutIsTerminal stops login from printing the refresh token where it
+// would stay in the terminal's scrollback.
+var errStdoutIsTerminal = errors.New("refusing to print the refresh token to a terminal; pipe it instead: shortlink-mcp login | pbcopy")
+
+// stdoutIsTerminal reports whether stdout is a character device.
+func stdoutIsTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func runLogin(ctx context.Context, args []string, isTerminal func() bool) error {
+	if isTerminal() {
+		return errStdoutIsTerminal
+	}
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	cfg := loginConfig{}
 	fs.StringVar(&cfg.Region, "region", os.Getenv(envRegion), "Cognito region (default $"+envRegion+")")

@@ -30,8 +30,9 @@ accepts alongside the admin frontend's client. That client allows
 and 90-day refresh tokens, and does not rotate refresh tokens.
 
 1. A person runs `shortlink-mcp login` once. It prompts for username and
-   password on the terminal (the password without echo, via `stty -echo`),
-   signs in and prints only the refresh token to stdout.
+   password on the terminal (the password without echo, via `stty`), signs in
+   and prints only the refresh token to stdout. It refuses to run when stdout
+   is a terminal, so the token never lands in the scrollback; pipe it instead.
 2. The refresh token goes into the secret broker as `SHORTLINK_REFRESH_TOKEN`.
 3. The server exchanges it for access tokens, keeps the current one in memory
    and renews it two minutes before it expires. It never sees the password.
@@ -67,12 +68,27 @@ go test ./...
 
 ## Sign in and register in Claude Code
 
-Get a refresh token and store it in the local secret broker (every 90 days):
+Get a refresh token and store it in the local secret broker (every 90 days).
+`secret set` prompts for the value on the terminal and cannot read piped
+stdin, so the token travels through the clipboard:
 
-```sh
-shortlink-mcp login -region <region> -client-id <mcp-client-id>
-secret set SHORTLINK_REFRESH_TOKEN   # paste the token printed above
-```
+1. Sign in; the token goes straight to the clipboard:
+
+   ```sh
+   shortlink-mcp login -region <region> -client-id <mcp-client-id> | pbcopy
+   ```
+
+2. Store it: run the command and paste at its hidden prompt:
+
+   ```sh
+   secret set SHORTLINK_REFRESH_TOKEN
+   ```
+
+3. Clear the clipboard:
+
+   ```sh
+   pbcopy < /dev/null
+   ```
 
 Register the server; `secret run` injects the secret as the environment
 variable of the same name into the server process only, and the non-secret
