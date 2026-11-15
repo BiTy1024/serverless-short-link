@@ -62,4 +62,6 @@ resource "aws_cognito_user_pool_client" "mcp" {
     id_token      = "minutes"
     refresh_token = "days"
   }
+
+  prevent_user_existence_errors = "ENABLED"
 }
