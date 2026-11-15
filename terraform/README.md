@@ -4,6 +4,7 @@ Provisions the whole stack: Lambda, HTTP API, DynamoDB, Cognito, S3, CloudFront,
 
 ## Prerequisites
 
+- Go and make, to build the Lambda binaries (`make -C lambdas build` from the repo root) before `plan`/`apply`
 - Terraform >= 1.6
 - AWS CLI configured for the target account
 - Route53 hosted zone for the parent domain
@@ -29,6 +30,7 @@ cd terraform
 cp backend.example.hcl backend.hcl     # fill in real values
 cp envs/example.tfvars envs/myenv.tfvars  # fill in real values
 
+make -C ../lambdas build               # Lambda binaries Terraform zips
 terraform init -backend-config=backend.hcl
 terraform apply -var-file=envs/myenv.tfvars
 ```
@@ -51,7 +53,7 @@ terraform/
 ├── modules/
 │   ├── data/         # DynamoDB tables
 │   ├── auth/         # Cognito pool + groups + client
-│   ├── lambda/       # reusable Lambda wrapper (terraform-aws-modules/lambda/aws)
+│   ├── lambda/       # Lambda wrapper: zips a prebuilt bootstrap binary (terraform-aws-modules/lambda/aws)
 │   ├── api/          # HTTP API + JWT authorizer + custom domain
 │   └── frontend/     # S3 + CloudFront + us-east-1 cert + Route53
 ├── envs/             # per-environment .tfvars files
